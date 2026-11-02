@@ -7,6 +7,10 @@ down:
 fresh:
 	docker compose down -v && docker compose up --build
 
+# reset the dev database and load demo data
+seed:
+	docker compose build -q api && docker compose run --rm api python scripts/seed.py
+
 # runs the suite against the real Postgres test database (netzence_test)
 test:
 	docker compose build api && docker compose run --rm api pytest -v
