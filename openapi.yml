@@ -192,20 +192,18 @@ paths:
           title: Driver Id
       - name: Idempotency-Key
         in: header
-        required: false
+        required: true
         schema:
-          anyOf:
-          - type: string
-            minLength: 1
-            maxLength: 128
-          - type: 'null'
-          description: Optional. Generate one per redeem attempt and resend it, with
-            the same body, only when retrying after no response. The redeem then happens
-            only once.
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Required. Generate one (e.g. a UUID) per redeem attempt and
+            resend it, with the same body, only when retrying after no response. The
+            redeem then happens only once.
           title: Idempotency-Key
-        description: Optional. Generate one per redeem attempt and resend it, with
-          the same body, only when retrying after no response. The redeem then happens
-          only once.
+        description: Required. Generate one (e.g. a UUID) per redeem attempt and resend
+          it, with the same body, only when retrying after no response. The redeem
+          then happens only once.
       requestBody:
         required: true
         content:

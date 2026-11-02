@@ -62,7 +62,7 @@ curl -X POST localhost:8000/rides/completed -H 'content-type: application/json' 
 curl localhost:8000/drivers/d1/balance
 curl "localhost:8000/drivers/d1/history?page=1&per_page=20"
 
-# redeem; the Idempotency-Key header is optional
+# redeem; the Idempotency-Key header is required (a new UUID per redeem attempt)
 curl -X POST localhost:8000/drivers/d1/redeem -H 'content-type: application/json' \
   -H 'Idempotency-Key: 7f3a9c1e-2b4d-4e8f-9a1b-3c5d7e9f1a2b' -d '{"amount":"1.000","reason":"Charging voucher"}'
 
@@ -96,7 +96,7 @@ are idempotent on `ride_id`, so retrying is always safe. Order doesn't matter: a
 cancellation that arrives before its completion is kept (202) and applied when
 the completion arrives.
 
-**Driver app: `Idempotency-Key` on redeem.**
+**Driver app: `Idempotency-Key` on redeem (required).**
 1. Generate a new UUID when the driver taps *Redeem*.
 2. Keep it until you get a final answer (any 2xx or 4xx).
 3. If the request times out or the connection drops, retry with the **same key
@@ -104,9 +104,9 @@ the completion arrives.
    `200` with the original result.
 4. The next tap gets a new key.
 
-Reusing a key with a different body returns `409`. Without a key, every request
-is a new redemption. Concurrent redemptions are safe either way: the driver's
-row is locked, so the balance can never go below zero.
+Reusing a key with a different body returns `409`; a request without the header
+is rejected with `422`. Separately, concurrent redemptions are safe because the
+driver's row is locked, so the balance can never go below zero.
 
 ## Project layout
 

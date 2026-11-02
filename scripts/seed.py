@@ -7,6 +7,7 @@ Goes through the same services as the API, so the data is always consistent.
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 from sqlalchemy import text
 
@@ -38,7 +39,9 @@ def ride(ride_id, driver_id, km, days, vehicle=VehicleType.ELECTRIC):
 
 def redeem(driver_id, amount, reason):
     with SessionLocal() as db:
-        redemption_service.redeem(db, driver_id, RedeemRequest(amount=Decimal(amount), reason=reason))
+        redemption_service.redeem(
+            db, driver_id, RedeemRequest(amount=Decimal(amount), reason=reason), idempotency_key=str(uuid4())
+        )
 
 
 def cancel(ride_id, reason):

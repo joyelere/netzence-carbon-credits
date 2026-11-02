@@ -26,12 +26,11 @@ from app.services.core.driver_service import available_balance
 
 
 def redeem(
-    db: Session, driver_id: str, data: RedeemRequest, idempotency_key: str | None = None
+    db: Session, driver_id: str, data: RedeemRequest, idempotency_key: str
 ) -> tuple[RedemptionResource, bool]:
     """Returns (redemption, created); created is False for a replayed retry.
 
-    Without an idempotency key a retry counts as a new redemption, since the
-    server can't tell it apart from a genuine second one."""
+    The key is required: only the client can tell a retry from a second redemption."""
     amount = to_milli(data.amount)
 
     with db.begin():
@@ -41,18 +40,17 @@ def redeem(
             raise DriverNotFoundException(driver_id)
 
         # same key + same body: return the earlier result instead of spending again
-        request_hash = fingerprint(amount, data.reason) if idempotency_key else None
-        if idempotency_key:
-            previous = db.scalar(
-                select(LedgerEntry).where(
-                    LedgerEntry.driver_id == driver_id,
-                    LedgerEntry.idempotency_key == idempotency_key,
-                )
+        request_hash = fingerprint(amount, data.reason)
+        previous = db.scalar(
+            select(LedgerEntry).where(
+                LedgerEntry.driver_id == driver_id,
+                LedgerEntry.idempotency_key == idempotency_key,
             )
-            if previous is not None:
-                if previous.request_hash != request_hash:
-                    raise IdempotencyConflictException(idempotency_key)
-                return _to_resource(db, previous), False
+        )
+        if previous is not None:
+            if previous.request_hash != request_hash:
+                raise IdempotencyConflictException(idempotency_key)
+            return _to_resource(db, previous), False
 
         rides = spendable_rides(db, driver_id)
         available = sum(r.credits_remaining for r in rides)

@@ -79,11 +79,21 @@ def test_idempotency_key_makes_a_retry_safe(client):
     assert balance(client) == "2.000"
 
 
-def test_without_a_key_each_request_is_a_new_redemption(client):
+def test_redeem_without_an_idempotency_key_is_rejected(client):
     complete(client, "r1", km=25)  # 3.000
 
-    assert redeem(client, "1.000").status_code == 201
-    assert redeem(client, "1.000").status_code == 201
+    res = client.post("/drivers/d1/redeem", json={"amount": "1.000"})
+
+    assert res.status_code == 422
+    assert res.json()["errors"][0]["loc"] == ["header", "Idempotency-Key"]
+    assert balance(client) == "3.000"
+
+
+def test_each_new_key_is_a_new_redemption(client):
+    complete(client, "r1", km=25)  # 3.000
+
+    assert redeem(client, "1.000", key="tap-1").status_code == 201
+    assert redeem(client, "1.000", key="tap-2").status_code == 201
     assert balance(client) == "1.000"
 
 
@@ -133,10 +143,10 @@ def test_retry_must_send_the_same_body_as_the_original(client):
 def test_key_and_fingerprint_are_stored_together(client):
     complete(client, "r1", km=25)
     redeem(client, "1.000", key="tap-1")
-    redeem(client, "1.000")  # no key
+    redeem(client, "1.000", key="tap-2")
 
     rows = scalar("SELECT count(*) FROM ledger_entries WHERE entry_type = 'debit' "
-                  "AND (idempotency_key IS NULL) = (request_hash IS NULL)")
+                  "AND idempotency_key IS NOT NULL AND request_hash IS NOT NULL")
     assert rows == 2
     assert len(scalar("SELECT request_hash FROM ledger_entries WHERE idempotency_key = 'tap-1'")) == 64
 

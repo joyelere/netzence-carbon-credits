@@ -29,14 +29,13 @@ def history(
 def redeem(
     driver_id: str,
     body: RedeemRequest,
-    idempotency_key: str | None = Header(
-        default=None,
+    idempotency_key: str = Header(
         alias="Idempotency-Key",
         min_length=1,
         max_length=128,
         description=(
-            "Optional. Generate one per redeem attempt and resend it, with the same body, "
-            "only when retrying after no response. The redeem then happens only once."
+            "Required. Generate one (e.g. a UUID) per redeem attempt and resend it, with the "
+            "same body, only when retrying after no response. The redeem then happens only once."
         ),
     ),
     db: Session = Depends(get_db),

@@ -3,6 +3,7 @@ The schema is built from the migrations once, and tables are emptied before each
 
 import os
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://netzence:netzence@localhost:5433/netzence_test"
@@ -67,7 +68,8 @@ def cancel(client, ride_id, reason="Refunded"):
 
 
 def redeem(client, amount, driver_id="d1", key=None):
-    headers = {"Idempotency-Key": key} if key else {}
+    # a fresh key per call, like a client tapping Redeem; pass key= to simulate a retry
+    headers = {"Idempotency-Key": key or str(uuid4())}
     return client.post(f"/drivers/{driver_id}/redeem", json={"amount": amount}, headers=headers)
 
 
