@@ -4,33 +4,33 @@
 
 ## The three biggest trade-offs
 
-1. **A row lock per driver, not SERIALIZABLE or optimistic retries.** Every write to a driver's credits first runs `SELECT ... FOR UPDATE` on the driver row, then reads the balance. Simultaneous redemptions for one driver queue instead of racing, so the balance can't go below zero, and there are no retry loops to get wrong. The cost is that one driver's writes are serialised, which is fine at one driver's request rate. A `CHECK (credits_remaining >= 0)` is the backstop. Removing the lock makes the 20-simultaneous-redemptions test fail, so the test really guards it.
-2. **Expiry is evaluated when reading, not by a scheduled job.** A ride's credits count only while `expires_at > now()`. Nothing has to run on time and expiry is exact to the second. The cost is that there is no "expired" ledger row; each credit line in the history shows how much of it expired instead.
-3. **A refunded ride's credits that were already spent are recovered, not clawed back into a negative balance.** The ride's unspent credits are reversed; what it had already used is taken from the driver's other credits; anything still uncovered is recorded as owed (`debt` entry) and taken from the next credits they earn (`recovery` entry). This keeps the balance at zero or above, at the cost of two extra entry types and an owed column.
+1. **A row lock per driver, not SERIALIZABLE or optimistic retries.** Every credit write first runs `SELECT ... FOR UPDATE` on the driver row, then reads the balance, so simultaneous redemptions queue and can't overspend. Cost: one driver's writes are serialised, which is fine at one driver's rate. `CHECK (credits_remaining >= 0)` is the backstop; removing the lock makes the 20-simultaneous-redemptions test fail.
+2. **Expiry is evaluated when reading, not by a scheduled job.** Credits count only while `expires_at > now()`: nothing has to run on time and expiry is exact. Cost: no "expired" ledger row; each history credit line shows how much of it expired.
+3. **Spent credits of a refunded ride are recovered, never clawed back into a negative balance.** The ride's unspent credits are reversed; what it had already used is taken from the driver's other credits; anything left is owed (`debt` entry) and taken from their next credits (`recovery` entry). Cost: two extra entry types and an owed column.
 
 ## Data model
 
-- `drivers` (`id`, `credits_owed`): the row that gets locked.
-- `rides` (`ride_id` PK, `credits`, `credits_remaining`, `expires_at`, `status`): the primary key makes a duplicate event impossible to store; `CHECK 0 <= credits_remaining <= credits`, and a cancelled ride must have 0 left. Only `completed` rides are ever spent from.
-- `ledger_entries`: the history: `credit | debit | reversal | recovery | debt`, amounts always positive. A trigger blocks `UPDATE`/`DELETE`, so the original entry always survives a cancellation. `UNIQUE (driver_id, idempotency_key)` plus a `request_hash`.
-- `credit_allocations`: how much each debit or recovery took from each ride. Credits are spent soonest-expiring first, which is oldest first since every credit lives exactly 12 months.
-- `ride_cancellations`: `pending | applied`, with no FK to `rides`, because a cancellation can arrive first.
+- `drivers` (`credits_owed`): the row that gets locked.
+- `rides` (`ride_id` PK, `credits`, `credits_remaining`, `expires_at`, `status`): the PK makes duplicate events impossible; `0 <= credits_remaining <= credits`; a cancelled ride has 0 left; only `completed` rides are spent from.
+- `ledger_entries`: `credit | debit | reversal | recovery | debt`, positive amounts, append-only (a trigger blocks `UPDATE`/`DELETE`, so the original entry survives a cancellation), `UNIQUE (driver_id, idempotency_key)` plus `request_hash`.
+- `credit_allocations`: what each debit or recovery took from each ride, soonest-expiring first, which is oldest first since every credit lives 12 months.
+- `ride_cancellations`: `pending | applied`, no FK to `rides` because a cancellation can arrive first.
 
-**Rejected:** my first version had separate `credit_lots` and `redemptions` tables (7 in all). Every ride produced exactly one lot and every redemption exactly one debit entry, so both duplicated other tables. I merged them, which also removed a join from every balance query. I also rejected a holding period before credits become redeemable: refunds can arrive after any hold, so recovery is needed anyway.
+**Rejected:** separate `credit_lots` and `redemptions` tables (my first version, 7 tables): each ride had exactly one lot and each redemption one debit, so they duplicated `rides` and the ledger; merging also removed a join from every balance query. Also a holding period before credits are redeemable: refunds can arrive after any hold, so recovery is needed anyway.
 
 ## The open questions
 
-- **Cancellation before completion:** stored as `pending` (202) and applied in the same transaction as the completion when it arrives. Rejecting it with an error would rely on the ride service retrying; if it gave up, a refunded ride would keep its credits. Pending rows never affect a balance, are never auto-deleted, and ones older than 48 hours are listed at `/rides/cancellations/pending` and logged.
-- **Rounding:** integers in milli-credits (1 = 1 g CO2), rounded down, returned as strings. Only electric rides earn, at 0.12 credits/km (assumptions in the README). No floating point anywhere.
-- **Crash halfway:** each request is one transaction, so it is all or nothing (a test injects a failure after credits were deducted: nothing is saved). Ride events are idempotent on `ride_id`. Redeem retries are safe with an `Idempotency-Key`, stored with a SHA-256 fingerprint of the body; reusing a key with a different body returns 409. Without a key, the server can't tell a retry from a second redemption, so that guarantee needs the client.
+- **Cancellation before completion:** stored as `pending` (202) and applied in the completion's transaction. Rejecting it would rely on the ride service retrying; if it gave up, a refunded ride would keep its credits. Pending rows never affect a balance and are never deleted; ones older than 48 hours are logged and listed at `/rides/cancellations/pending`.
+- **Rounding:** integer milli-credits (1 = 1 g CO2), rounded down, returned as strings; no floating point anywhere. Only electric rides earn, 0.12 credits/km (assumptions in the README).
+- **Crash halfway:** each request is one transaction (a test fails it after credits were deducted: nothing is saved). Ride events are idempotent on `ride_id`. Redeem retries are safe with an `Idempotency-Key` stored with a SHA-256 fingerprint of the body (different body: 409); without a key the server can't tell a retry from a second redemption, so this needs the client.
 
 ## With two more days
 
-- Authenticate the ride service's calls (signed requests / API key). It is trusted as the source of truth for completions and refunds; what needs checking is that the caller really is it.
-- Publish a `redemption.created` event through an outbox table so a rewards service can fulfil redemptions reliably (issuing vouchers or payouts is out of scope here).
-- Expire idempotency keys and remember failed outcomes too.
+- Authenticate the ride service (signed requests / API key): it is trusted for completions and refunds, but the caller should be verified.
+- An outbox `redemption.created` event so a rewards service fulfils redemptions reliably (vouchers and payouts are out of scope).
+- Expire idempotency keys; remember failed outcomes too.
 - Load-test lock contention; alert on stuck pending cancellations and growing owed balances.
 
 ## One thing that didn't work
 
-After merging the lots into `rides`, the test that races a cancellation against a redemption failed: 3.000 credits produced 2.000 redeemed **and** 3.000 reversed. The cancellation read the ride before waiting for the driver lock, then acted on a stale copy. Re-reading the ride after taking the lock fixed it. The lesson: any state a decision depends on must be read under the lock.
+After merging the lots into `rides`, the cancel-versus-redeem race test failed: 3.000 credits ended up 2.000 redeemed **and** 3.000 reversed. The cancellation read the ride before waiting for the driver lock and acted on a stale copy. Re-reading after taking the lock fixed it. Lesson: read the state a decision depends on under the lock.
