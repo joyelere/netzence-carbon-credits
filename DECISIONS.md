@@ -1,6 +1,6 @@
 # Decisions
 
-**Time spent:** _TODO_
+**Time spent:** about 3.5 hours.
 
 ## The three biggest trade-offs
 
