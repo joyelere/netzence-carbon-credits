@@ -26,7 +26,7 @@
 
 ## With two more days
 
-- Authenticate the ride service (signed requests / API key): it is trusted for completions and refunds, but the caller should be verified.
+- Authenticate callers: drivers with a token (driver id taken from the token, not the URL, so nobody can redeem another driver's credits), and the ride service with signed requests. It is trusted for completions and refunds, but its identity should be verified.
 - An outbox `redemption.created` event so a rewards service fulfils redemptions reliably (vouchers and payouts are out of scope).
 - Expire idempotency keys; remember failed outcomes too.
 - Load-test lock contention; alert on stuck pending cancellations and growing owed balances.
