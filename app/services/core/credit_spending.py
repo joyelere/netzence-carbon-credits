@@ -1,18 +1,20 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.enums import EntryType
+from app.enums import EntryType, RideStatus
 from app.models import CreditAllocation, LedgerEntry, Ride
 
 
 def spendable_rides(db: Session, driver_id: str) -> list[Ride]:
-    """Unexpired rides with credits left, soonest expiry first. Caller holds the driver lock."""
+    """Completed, unexpired rides with credits left, soonest expiry first.
+    Caller holds the driver lock."""
     db.flush()  # pending changes to credits_remaining must be visible to the query
     return list(
         db.scalars(
             select(Ride)
             .where(
                 Ride.driver_id == driver_id,
+                Ride.status == RideStatus.COMPLETED.value,
                 Ride.expires_at > func.now(),
                 Ride.credits_remaining > 0,
             )

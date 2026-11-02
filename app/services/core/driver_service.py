@@ -24,6 +24,7 @@ def available_balance(db: Session, driver_id: str) -> int:
     return db.scalar(
         select(func.coalesce(func.sum(Ride.credits_remaining), 0)).where(
             Ride.driver_id == driver_id,
+            Ride.status == RideStatus.COMPLETED.value,
             Ride.expires_at > func.now(),
         )
     )
@@ -39,6 +40,7 @@ def get_balance(db: Session, driver_id: str) -> BalanceResource:
         select(Ride.expires_at, func.sum(Ride.credits_remaining))
         .where(
             Ride.driver_id == driver_id,
+            Ride.status == RideStatus.COMPLETED.value,
             Ride.expires_at > func.now(),
             Ride.credits_remaining > 0,
         )

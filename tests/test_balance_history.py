@@ -87,3 +87,21 @@ def test_database_refuses_to_overspend_a_ride_even_if_code_had_a_bug(client):
     with pytest.raises(DBAPIError, match="ck_rides_remaining_in_range"):
         with engine.begin() as conn:
             conn.execute(text("UPDATE rides SET credits_remaining = -1"))
+
+
+def test_database_refuses_a_cancelled_ride_with_credits_left(client):
+    complete(client, "r1", km=10)
+    cancel(client, "r1")
+
+    with pytest.raises(DBAPIError, match="ck_rides_cancelled_has_no_credits"):
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE rides SET credits_remaining = 100 WHERE ride_id = 'r1'"))
+
+
+def test_a_new_ride_starts_with_all_its_credits_remaining(client):
+    complete(client, "ev", km=25)
+    complete(client, "petrol", km=25, vehicle="petrol")
+
+    with engine.connect() as conn:
+        rows = {r[0]: (r[1], r[2]) for r in conn.execute(text("SELECT ride_id, credits, credits_remaining FROM rides"))}
+    assert rows == {"ev": (3000, 3000), "petrol": (0, 0)}

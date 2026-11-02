@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.core import credit_spending
-from tests.conftest import balance, complete, days_ago, redeem, scalar
+from tests.conftest import balance, cancel, complete, days_ago, redeem, scalar
 
 
 def test_simultaneous_redeems_never_take_the_balance_below_zero():
@@ -139,3 +139,14 @@ def test_key_and_fingerprint_are_stored_together(client):
                   "AND (idempotency_key IS NULL) = (request_hash IS NULL)")
     assert rows == 2
     assert len(scalar("SELECT request_hash FROM ledger_entries WHERE idempotency_key = 'tap-1'")) == 64
+
+
+def test_redeem_only_spends_from_completed_rides(client):
+    complete(client, "kept", km=10, completed_at=days_ago(5))       # 1.200
+    complete(client, "refunded", km=50, completed_at=days_ago(50))  # 6.000, expires first
+    cancel(client, "refunded")
+
+    res = redeem(client, "1.200")
+
+    assert [c["ride_id"] for c in res.json()["data"]["consumed"]] == ["kept"]
+    assert redeem(client, "0.001").status_code == 422  # nothing left anywhere
