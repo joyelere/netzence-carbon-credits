@@ -40,6 +40,7 @@ def to_milli(credits: Decimal) -> int:
 
 def format_credits(milli: int) -> str:
     """2500 -> '2.500'. Returned as a string so JSON never carries a float."""
+    milli = int(milli)  # Postgres SUM(bigint) comes back as Decimal
     sign = "-" if milli < 0 else ""
     whole, frac = divmod(abs(milli), MILLI_PER_CREDIT)
     return f"{sign}{whole}.{frac:03d}"

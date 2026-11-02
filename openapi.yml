@@ -55,6 +55,57 @@ paths:
         500:
           description: Server error. Report to developer
 
+  #############################
+  #### DRIVERS ####
+  #############################
+  /drivers/{driver_id}/balance:
+    get:
+      tags: ["Drivers"]
+      summary: Current balance (unexpired, unspent credits only)
+      parameters:
+        - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
+      responses:
+        200:
+          description: Balance fetched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Balance fetched successfully." }
+                  data: { $ref: "#/components/schemas/Balance" }
+        404:
+          description: Driver has no recorded rides
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /drivers/{driver_id}/history:
+    get:
+      tags: ["Drivers"]
+      summary: Every credit and debit with its reason (newest first, paginated)
+      description: |
+        Stored ledger entries (credit, debit, reversal) plus computed "expiry" lines for
+        credits that expired unused. Summing all entries equals the balance.
+      parameters:
+        - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
+        - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+      responses:
+        200:
+          description: History fetched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "History fetched successfully." }
+                  data: { $ref: "#/components/schemas/History" }
+        404:
+          description: Driver has no recorded rides
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
 components:
   schemas:
     Error:
@@ -87,3 +138,35 @@ components:
       properties:
         message: { type: string, example: "Ride created successfully." }
         data: { $ref: "#/components/schemas/Ride" }
+
+    Balance:
+      type: object
+      properties:
+        driver_id: { type: string }
+        balance: { type: string, example: "2.700" }
+        next_expiry_at: { type: string, format: date-time, nullable: true }
+        next_expiry_amount: { type: string, nullable: true, example: "1.500" }
+    HistoryEntry:
+      type: object
+      properties:
+        id: { type: integer, nullable: true, description: "null for computed expiry lines" }
+        type: { type: string, enum: [credit, debit, reversal, expiry] }
+        amount: { type: string, example: "+1.500" }
+        reason: { type: string, example: "Ride ride_001 completed (12.5 km, electric)" }
+        ride_id: { type: string, nullable: true }
+        redemption_id: { type: integer, nullable: true }
+        occurred_at: { type: string, format: date-time, description: "When it happened (credits use the ride's completed_at)" }
+        recorded_at: { type: string, format: date-time, description: "When this service recorded it" }
+    History:
+      type: object
+      properties:
+        driver_id: { type: string }
+        balance: { type: string }
+        entries: { type: array, items: { $ref: "#/components/schemas/HistoryEntry" } }
+        pagination:
+          type: object
+          properties:
+            current_page: { type: integer, example: 1 }
+            per_page: { type: integer, example: 20 }
+            total: { type: integer, example: 4 }
+            last_page: { type: integer, example: 1 }

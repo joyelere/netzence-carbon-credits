@@ -31,6 +31,9 @@ class EntryType(str, Enum):
     CREDIT = "credit"      # earned from a completed ride (+)
     DEBIT = "debit"        # spent by a redemption (-)
     REVERSAL = "reversal"  # taken back because the ride was cancelled (-)
+    # Computed when reading history (unused credits past expires_at).
+    # Never stored: the DB CHECK constraint only allows the three above.
+    EXPIRY = "expiry"
 
     @classmethod
     def values(cls) -> list[str]:
