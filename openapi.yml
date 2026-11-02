@@ -14,3 +14,76 @@ paths:
       responses:
         200:
           description: Service is up
+
+  #############################
+  #### RIDE EVENTS ####
+  #############################
+  /rides/completed:
+    post:
+      tags: ["Rides"]
+      summary: Record a completed ride and award credits
+      description: |
+        Idempotent on ride_id. Electric rides earn 0.12 credits/km (1 credit = 1 kg CO2 avoided);
+        other vehicle types are recorded with 0 credits. Credits expire 12 months after completed_at.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RideCompletedRequest"
+      responses:
+        201:
+          description: Ride recorded, credits awarded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RideEnvelope" }
+        200:
+          description: Duplicate event - already recorded, nothing changed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RideEnvelope" }
+        409:
+          description: Same ride_id already recorded with different details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        422:
+          description: Validation errors
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        500:
+          description: Server error. Report to developer
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        message: { type: string }
+        errors: { type: array, items: { type: object } }
+    RideCompletedRequest:
+      type: object
+      required: [ride_id, driver_id, distance_km, vehicle_type, completed_at]
+      properties:
+        ride_id: { type: string, example: "ride_001" }
+        driver_id: { type: string, example: "driver_42" }
+        distance_km: { type: number, minimum: 0, example: 12.5, description: "Max 3 decimal places" }
+        vehicle_type: { type: string, enum: [electric, hybrid, petrol, diesel] }
+        completed_at: { type: string, format: date-time, example: "2026-10-01T09:30:00Z", description: "Must include a timezone" }
+    Ride:
+      type: object
+      properties:
+        ride_id: { type: string }
+        driver_id: { type: string }
+        distance_km: { type: string, example: "12.500" }
+        vehicle_type: { type: string }
+        status: { type: string, enum: [completed, cancelled] }
+        credits: { type: string, example: "1.500", description: "Decimal string, 3 dp - never a float" }
+        completed_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true }
+    RideEnvelope:
+      type: object
+      properties:
+        message: { type: string, example: "Ride created successfully." }
+        data: { $ref: "#/components/schemas/Ride" }

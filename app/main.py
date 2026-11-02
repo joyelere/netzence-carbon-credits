@@ -7,8 +7,10 @@ from fastapi.encoders import jsonable_encoder
 from app.config import settings
 from app.exceptions import AppException
 from app.responses import send_error, send_success
+from app.routers import rides
 
 app = FastAPI(title=settings.app_name, version="1.0.0")
+app.include_router(rides.router)
 
 
 @app.exception_handler(AppException)
