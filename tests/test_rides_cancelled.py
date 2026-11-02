@@ -1,4 +1,4 @@
-"""POST /rides/cancelled — reversals keep the original entry (requirement 5),
+"""POST /rides/cancelled: reversals keep the original entry (requirement 5),
 plus the open question: cancellation arriving before completion."""
 
 import threading

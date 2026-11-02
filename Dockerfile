@@ -13,5 +13,5 @@ COPY . .
 
 EXPOSE 8000
 
-# Run migrations, then start the server (like `php artisan migrate --force && php artisan serve`)
+# Run migrations, then start the server
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

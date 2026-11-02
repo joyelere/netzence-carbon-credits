@@ -1,4 +1,4 @@
-"""POST /rides/completed — credit award and duplicate events (requirements 1 & 2)."""
+"""POST /rides/completed: credit award and duplicate events (requirements 1 & 2)."""
 
 import threading
 from concurrent.futures import ThreadPoolExecutor

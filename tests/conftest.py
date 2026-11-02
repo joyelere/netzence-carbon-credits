@@ -1,9 +1,5 @@
-"""Test setup — runs against a REAL PostgreSQL database (netzence_test).
-
-- Points the app at TEST_DATABASE_URL *before* any app module is imported.
-- Builds the schema with the real Alembic migrations once per test run.
-- Empties every table before each test so tests never depend on each other.
-"""
+"""Tests run against a real Postgres database (TEST_DATABASE_URL).
+The schema is built from the migrations once, and tables are emptied before each test."""
 
 import os
 from datetime import UTC, datetime, timedelta
@@ -28,7 +24,6 @@ TABLES = "redemption_allocations, ledger_entries, ride_cancellations, rides, dri
 def migrated_database():
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
-    # start from an empty database every run, then apply every migration in order
     with engine.begin() as conn:
         conn.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public"))
     command.upgrade(cfg, "head")
@@ -37,7 +32,7 @@ def migrated_database():
 
 @pytest.fixture(autouse=True)
 def clean_tables():
-    # TRUNCATE skips row-level triggers, so the append-only ledger can be reset here.
+    # TRUNCATE bypasses the append-only trigger
     with engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))
     yield

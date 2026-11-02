@@ -14,5 +14,6 @@ test:
 migrate:
 	docker compose exec api alembic upgrade head
 
+# create a dated migration file: make migration name=create_x_table
 migration:
-	docker compose exec api alembic revision -m "$(name)"
+	docker compose exec api alembic revision -m "$(name)" --rev-id "$$(date +%Y_%m_%d_%H%M%S)"

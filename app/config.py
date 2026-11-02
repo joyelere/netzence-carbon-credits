@@ -1,5 +1,3 @@
-"""App settings, read from environment / .env (like Laravel's config/*.php + .env)."""
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

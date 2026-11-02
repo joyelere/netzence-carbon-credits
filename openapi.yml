@@ -201,7 +201,9 @@ paths:
       description: |
         Locks the driver row (SELECT ... FOR UPDATE) so simultaneous redeems run one at a time
         and can never take the balance below zero. Spends unexpired credits oldest-expiry first.
-        Send an Idempotency-Key header to make retries safe.
+        Send an Idempotency-Key header to make retries safe: the key is stored with a SHA-256
+        fingerprint of the body; a retry with the same key and body returns the original result
+        (200), the same key with a different body is refused (409).
       parameters:
         - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
         - name: Idempotency-Key
@@ -209,7 +211,7 @@ paths:
           required: false
           schema: { type: string, maxLength: 128 }
           example: "redeem-7f3a"
-          description: Optional. Reuse the same value when retrying and the redeem happens only once.
+          description: Optional. Generate one per redeem attempt; resend it with the same body only when retrying after no response. The redeem then happens only once.
       requestBody:
         required: true
         content:
@@ -238,7 +240,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         409:
-          description: Idempotency key reused with a different amount
+          description: Idempotency-Key reused with a different request body
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

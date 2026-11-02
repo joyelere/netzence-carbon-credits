@@ -1,4 +1,4 @@
-"""POST /drivers/{id}/redeem — concurrency, FIFO, expiry, idempotency, crash safety
+"""POST /drivers/{id}/redeem: concurrency, FIFO, expiry, idempotency, crash safety
 (requirements 4 & 6)."""
 
 import threading
@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services import redemption_service
+from app.services.core import redemption_service
 from tests.conftest import balance, complete, days_ago, redeem, scalar
 
 
@@ -113,3 +113,29 @@ def test_unknown_driver_gets_404(client):
 def test_invalid_amounts_are_rejected(client, amount):
     complete(client, "r1")
     assert redeem(client, amount).status_code == 422
+
+
+def test_retry_must_send_the_same_body_as_the_original(client):
+    complete(client, "r1", km=25)  # 3.000
+    send = lambda body: client.post("/drivers/d1/redeem", json=body, headers={"Idempotency-Key": "tap-9"})
+
+    first = send({"amount": "1.000", "reason": "Voucher"})
+    same_body_written_differently = send({"amount": "1", "reason": "Voucher"})
+    different_reason = send({"amount": "1.000", "reason": "Fuel"})
+
+    assert first.status_code == 201
+    assert same_body_written_differently.status_code == 200  # "1" == "1.000"
+    assert different_reason.status_code == 409
+    assert "different request" in different_reason.json()["message"]
+    assert balance(client) == "2.000"  # spent exactly once
+
+
+def test_key_and_fingerprint_are_stored_together(client):
+    complete(client, "r1", km=25)
+    redeem(client, "1.000", key="tap-1")
+    redeem(client, "1.000")  # no key
+
+    rows = scalar("SELECT count(*) FROM ledger_entries WHERE entry_type = 'debit' "
+                  "AND (idempotency_key IS NULL) = (request_hash IS NULL)")
+    assert rows == 2
+    assert len(scalar("SELECT request_hash FROM ledger_entries WHERE idempotency_key = 'tap-1'")) == 64

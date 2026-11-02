@@ -1,5 +1,3 @@
-"""Database engine + per-request session (like Laravel's DB facade)."""
-
 from collections.abc import Iterator
 
 from sqlalchemy import create_engine
@@ -16,7 +14,7 @@ class Base(DeclarativeBase):
 
 
 def get_db() -> Iterator[Session]:
-    """FastAPI dependency: one session per request, always closed afterwards."""
+    """One session per request."""
     db = SessionLocal()
     try:
         yield db
