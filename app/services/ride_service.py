@@ -95,7 +95,7 @@ def record_completed_ride(db: Session, data: RideCompletedRequest) -> tuple[Ride
         # original entry) and reverse it straight away in the same transaction.
         early_cancel = db.get(RideCancellation, data.ride_id)
         if early_cancel is not None:
-            _apply_reversal(db, ride, early_cancel.reason)
+            _apply_reversal(db, ride, early_cancel)
 
         return _to_resource(db, ride), True
 
@@ -109,18 +109,19 @@ def record_cancellation(db: Session, data: RideCancelledRequest) -> tuple[Cancel
         if previous is not None:
             return _cancellation_resource(db, data.ride_id, previous.reason), False
 
-        db.add(RideCancellation(ride_id=data.ride_id, reason=data.reason))
+        cancellation = RideCancellation(ride_id=data.ride_id, reason=data.reason)
+        db.add(cancellation)
         db.flush()
 
         ride = db.get(Ride, data.ride_id)
         if ride is not None:
             lock_driver(db, ride.driver_id)
-            _apply_reversal(db, ride, data.reason)
+            _apply_reversal(db, ride, cancellation)
 
         return _cancellation_resource(db, data.ride_id, data.reason), True
 
 
-def _apply_reversal(db: Session, ride: Ride, reason: str | None) -> None:
+def _apply_reversal(db: Session, ride: Ride, cancellation: RideCancellation) -> None:
     """Mark the ride cancelled and take back its UNSPENT credits.
 
     The original credit entry is never touched; a new 'reversal' entry is added.
@@ -129,7 +130,9 @@ def _apply_reversal(db: Session, ride: Ride, reason: str | None) -> None:
     Caller must hold the ride and driver locks.
     """
     ride.status = RideStatus.CANCELLED.value
-    ride.cancelled_at = func.now()
+    # When the cancellation arrived — which may be before the completion did.
+    ride.cancelled_at = cancellation.received_at
+    reason = cancellation.reason
 
     lot = db.scalar(select(CreditLot).where(CreditLot.ride_id == ride.ride_id))
     if lot is not None and lot.remaining > 0:
