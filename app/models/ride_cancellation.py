@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy import BigInteger, DateTime, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -17,3 +17,8 @@ class RideCancellation(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending")
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # set when applied: the ride's own unspent credits, what was taken from other
+    # credits to cover what it had already used, and what is still owed
+    reversed_amount: Mapped[int | None] = mapped_column(BigInteger)
+    recovered_amount: Mapped[int | None] = mapped_column(BigInteger)
+    owed_amount: Mapped[int | None] = mapped_column(BigInteger)

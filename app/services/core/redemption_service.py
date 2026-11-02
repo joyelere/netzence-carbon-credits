@@ -8,7 +8,7 @@ the rides that expire soonest. The debit ledger entry is the redemption record.
 import hashlib
 import json
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.enums import EntryType
@@ -17,10 +17,11 @@ from app.exceptions import (
     IdempotencyConflictException,
     InsufficientBalanceException,
 )
-from app.models import Driver, LedgerEntry, RedemptionAllocation, Ride
+from app.models import CreditAllocation, Driver, LedgerEntry, Ride
 from app.http.requests import RedeemRequest
 from app.http.resources import ConsumedRide, RedemptionResource
 from app.services.calculation.credits import format_credits, to_milli
+from app.services.core.credit_spending import spendable_rides, take_credits
 from app.services.core.driver_service import available_balance
 
 
@@ -53,49 +54,24 @@ def redeem(
                     raise IdempotencyConflictException(idempotency_key)
                 return _to_resource(db, previous), False
 
-        # spendable rides, soonest expiry first
-        rides = db.scalars(
-            select(Ride)
-            .where(
-                Ride.driver_id == driver_id,
-                Ride.expires_at > func.now(),
-                Ride.credits_remaining > 0,
-            )
-            .order_by(Ride.expires_at, Ride.ride_id)
-        ).all()
-
+        rides = spendable_rides(db, driver_id)
         available = sum(r.credits_remaining for r in rides)
         if available < amount:
             raise InsufficientBalanceException(format_credits(available), format_credits(amount))
 
-        taken: list[tuple[str, int]] = []
-        still_needed = amount
-        for ride in rides:
-            if still_needed == 0:
-                break
-            take = min(ride.credits_remaining, still_needed)
-            ride.credits_remaining -= take
-            still_needed -= take
-            taken.append((ride.ride_id, take))
-
         reason = f"Redeemed {format_credits(amount)} credits"
         if data.reason:
             reason += f": {data.reason}"
-        debit = LedgerEntry(
+        debit, _ = take_credits(
+            db,
+            rides,
+            amount,
             driver_id=driver_id,
-            entry_type=EntryType.DEBIT.value,
-            amount=amount,
+            entry_type=EntryType.DEBIT,
             reason=reason,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
         )
-        db.add(debit)
-        db.flush()  # need debit.id
-        db.add_all(
-            RedemptionAllocation(ledger_entry_id=debit.id, ride_id=ride_id, amount=take)
-            for ride_id, take in taken
-        )
-        db.flush()
         return _to_resource(db, debit), True
 
 
@@ -107,10 +83,10 @@ def fingerprint(amount_milli: int, reason: str | None) -> str:
 
 def _to_resource(db: Session, debit: LedgerEntry) -> RedemptionResource:
     consumed = db.execute(
-        select(RedemptionAllocation.ride_id, RedemptionAllocation.amount, Ride.expires_at)
-        .join(Ride, Ride.ride_id == RedemptionAllocation.ride_id)
-        .where(RedemptionAllocation.ledger_entry_id == debit.id)
-        .order_by(RedemptionAllocation.id)
+        select(CreditAllocation.ride_id, CreditAllocation.amount, Ride.expires_at)
+        .join(Ride, Ride.ride_id == CreditAllocation.ride_id)
+        .where(CreditAllocation.ledger_entry_id == debit.id)
+        .order_by(CreditAllocation.id)
     ).all()
     return RedemptionResource(
         redemption_id=debit.id,

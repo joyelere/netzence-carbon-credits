@@ -17,7 +17,7 @@ from sqlalchemy import text  # noqa: E402
 from app.database import engine  # noqa: E402
 from app.main import app  # noqa: E402
 
-TABLES = "redemption_allocations, ledger_entries, ride_cancellations, rides, drivers"
+TABLES = "credit_allocations, ledger_entries, ride_cancellations, rides, drivers"
 
 
 @pytest.fixture(scope="session", autouse=True)

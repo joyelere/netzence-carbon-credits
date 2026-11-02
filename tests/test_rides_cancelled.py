@@ -32,8 +32,7 @@ def test_cancel_after_partial_spend_reverses_only_what_is_left(client):
 
     data = cancel(client, "r1").json()["data"]
 
-    assert data["reversed"] == "1.000"
-    assert data["already_redeemed"] == "2.000"
+    assert (data["reversed"], data["recovered"], data["owed"]) == ("1.000", "0.000", "2.000")
     assert balance(client) == "0.000"  # never negative
 
 
@@ -83,9 +82,10 @@ def test_cancel_racing_redeem_never_overspends():
         assert c.result() == 200
         assert r.result() in (201, 422)
 
-    used = scalar("SELECT coalesce(sum(amount), 0) FROM redemption_allocations")
+    used = scalar("SELECT coalesce(sum(amount), 0) FROM credit_allocations")
     reversed_ = scalar("SELECT coalesce(sum(amount), 0) FROM ledger_entries WHERE entry_type = 'reversal'")
     assert used + reversed_ == 3000
+    assert scalar("SELECT credits_owed FROM drivers") == used  # redeemed first -> now owed
     assert balance(setup) == "0.000"
 
 

@@ -6,10 +6,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 
-class RedemptionAllocation(Base):
-    """How much a redemption (debit entry) took from each ride."""
+class CreditAllocation(Base):
+    """How much a debit (redemption) or recovery entry took from each ride."""
 
-    __tablename__ = "redemption_allocations"
+    __tablename__ = "credit_allocations"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     ledger_entry_id: Mapped[int] = mapped_column(ForeignKey("ledger_entries.id"))

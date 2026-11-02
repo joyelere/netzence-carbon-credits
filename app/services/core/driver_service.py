@@ -30,7 +30,9 @@ def available_balance(db: Session, driver_id: str) -> int:
 
 
 def get_balance(db: Session, driver_id: str) -> BalanceResource:
-    ensure_driver_exists(db, driver_id)
+    driver = db.get(Driver, driver_id)
+    if driver is None:
+        raise DriverNotFoundException(driver_id)
     balance = available_balance(db, driver_id)
 
     next_expiry = db.execute(
@@ -48,20 +50,25 @@ def get_balance(db: Session, driver_id: str) -> BalanceResource:
     return BalanceResource(
         driver_id=driver_id,
         balance=format_credits(balance),
+        owed=format_credits(driver.credits_owed),
         next_expiry_at=next_expiry[0] if next_expiry else None,
         next_expiry_amount=format_credits(next_expiry[1]) if next_expiry else None,
     )
 
 
 # Credit lines are dated by the ride's completed_at and carry the ride's current
-# state, so each adds up: amount = used + expired + reversed + remaining.
+# state, so each adds up: amount = used + recovered + expired + reversed + remaining.
 HISTORY_ROWS = """
     SELECT le.id, le.entry_type, le.amount, le.reason, le.ride_id,
            CASE WHEN le.entry_type = 'credit' THEN r.completed_at ELSE le.created_at END AS occurred_at,
            le.created_at AS recorded_at,
            r.credits_remaining, r.expires_at, r.status AS ride_status,
-           (SELECT coalesce(sum(a.amount), 0) FROM redemption_allocations a
-             WHERE a.ride_id = r.ride_id) AS ride_used,
+           (SELECT coalesce(sum(a.amount), 0) FROM credit_allocations a
+              JOIN ledger_entries x ON x.id = a.ledger_entry_id
+             WHERE a.ride_id = r.ride_id AND x.entry_type = 'debit') AS ride_used,
+           (SELECT coalesce(sum(a.amount), 0) FROM credit_allocations a
+              JOIN ledger_entries x ON x.id = a.ledger_entry_id
+             WHERE a.ride_id = r.ride_id AND x.entry_type = 'recovery') AS ride_recovered,
            (SELECT coalesce(sum(rv.amount), 0) FROM ledger_entries rv
              WHERE rv.ride_id = r.ride_id AND rv.entry_type = 'reversal') AS ride_reversed
       FROM ledger_entries le
@@ -116,7 +123,7 @@ def _credit_state(r, now) -> dict:
         status = CreditStatus.EXPIRED
     elif r.credits_remaining == 0:
         status = CreditStatus.USED
-    elif r.ride_used > 0:
+    elif r.ride_used + r.ride_recovered > 0:
         status = CreditStatus.PARTIALLY_USED
     else:
         status = CreditStatus.ACTIVE
@@ -124,6 +131,7 @@ def _credit_state(r, now) -> dict:
         "status": status,
         "expires_at": r.expires_at,
         "used": format_credits(r.ride_used),
+        "recovered": format_credits(r.ride_recovered),
         "expired": format_credits(expired_amount),
         "reversed": format_credits(r.ride_reversed),
         "remaining": format_credits(spendable),

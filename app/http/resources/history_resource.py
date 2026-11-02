@@ -14,10 +14,11 @@ class HistoryEntryResource(BaseModel):
     ride_id: str | None
     occurred_at: datetime  # for credits, the ride's completed_at
     recorded_at: datetime
-    # credit lines only: amount = used + expired + reversed + remaining
+    # credit lines only: amount = used + recovered + expired + reversed + remaining
     status: CreditStatus | None = None
     expires_at: datetime | None = None
     used: str | None = None
+    recovered: str | None = None  # used to cover credits owed
     expired: str | None = None
     reversed: str | None = None
     remaining: str | None = None

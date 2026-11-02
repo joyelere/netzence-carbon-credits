@@ -11,5 +11,7 @@ class CancellationResource(BaseModel):
     reason: str | None
     received_at: datetime
     applied_at: datetime | None
-    reversed: str
-    already_redeemed: str  # spent before the cancellation, not clawed back
+    # null while pending
+    reversed: str | None   # the ride's own unspent credits
+    recovered: str | None  # already-used credits, taken from the driver's other credits
+    owed: str | None       # already-used credits the driver couldn't cover yet

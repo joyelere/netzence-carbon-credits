@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.enums import CancellationStatus, EntryType, RideStatus
 from app.exceptions import RideConflictException
-from app.models import Driver, LedgerEntry, RedemptionAllocation, Ride, RideCancellation
+from app.models import Driver, LedgerEntry, Ride, RideCancellation
 from app.http.requests import RideCancelledRequest, RideCompletedRequest
 from app.http.resources import (
     CancellationResource,
@@ -18,6 +18,7 @@ from app.http.resources import (
     RideResource,
 )
 from app.services.calculation.credits import calculate_credits_milli, expiry_for, format_credits
+from app.services.core.credit_spending import spendable_rides, take_credits
 
 log = logging.getLogger("app.rides")
 
@@ -28,11 +29,13 @@ def lock_ride_id(db: Session, ride_id: str) -> None:
     db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": f"ride:{ride_id}"})
 
 
-def lock_driver(db: Session, driver_id: str) -> None:
+def lock_driver(db: Session, driver_id: str) -> Driver:
     """Create the driver row if needed and lock it. Every write to a driver's
     credits takes this lock first."""
     db.execute(pg_insert(Driver).values(id=driver_id).on_conflict_do_nothing(index_elements=["id"]))
-    db.execute(select(Driver.id).where(Driver.id == driver_id).with_for_update())
+    return db.scalars(
+        select(Driver).where(Driver.id == driver_id).with_for_update().execution_options(populate_existing=True)
+    ).one()
 
 
 def record_completed_ride(db: Session, data: RideCompletedRequest) -> tuple[RideResource, bool]:
@@ -45,7 +48,7 @@ def record_completed_ride(db: Session, data: RideCompletedRequest) -> tuple[Ride
             _ensure_same_event(existing, data)
             return _to_resource(existing), False
 
-        lock_driver(db, data.driver_id)
+        driver = lock_driver(db, data.driver_id)
         credits = calculate_credits_milli(data.distance_km, data.vehicle_type)
 
         # The primary key is the final guard against double credits.
@@ -85,7 +88,9 @@ def record_completed_ride(db: Session, data: RideCompletedRequest) -> tuple[Ride
         # The cancellation got here first: keep the credit entry, reverse it now.
         early_cancel = db.get(RideCancellation, data.ride_id)
         if early_cancel is not None:
-            _apply_reversal(db, ride, early_cancel)
+            _apply_reversal(db, ride, early_cancel, driver)
+        elif driver.credits_owed > 0:
+            _recover_owed(db, driver)
 
         return _to_resource(ride), True
 
@@ -105,14 +110,14 @@ def record_cancellation(db: Session, data: RideCancelledRequest) -> tuple[Cancel
 
         driver_id = db.scalar(select(Ride.driver_id).where(Ride.ride_id == data.ride_id))
         if driver_id is not None:
-            lock_driver(db, driver_id)
+            driver = lock_driver(db, driver_id)
             # Re-read after the lock: a redeem may have spent some credits meanwhile.
             ride = db.scalars(
                 select(Ride)
                 .where(Ride.ride_id == data.ride_id)
                 .execution_options(populate_existing=True)
             ).one()
-            _apply_reversal(db, ride, cancellation)
+            _apply_reversal(db, ride, cancellation, driver)
         else:
             log.warning(
                 "Cancellation for unknown ride %s stored as pending; it will be applied "
@@ -123,55 +128,80 @@ def record_cancellation(db: Session, data: RideCancelledRequest) -> tuple[Cancel
         return _cancellation_resource(db, cancellation), True
 
 
-def _apply_reversal(db: Session, ride: Ride, cancellation: RideCancellation) -> None:
-    """Reverse the ride's unspent credits with a new ledger entry. Credits
-    already redeemed are not clawed back, so the balance can't go negative.
-    Caller holds the ride and driver locks."""
+def _apply_reversal(db: Session, ride: Ride, cancellation: RideCancellation, driver: Driver) -> None:
+    """Take back the ride's own unspent credits. Whatever it had already used
+    (redeemed, or spent repaying a debt) is taken from the driver's other
+    credits; anything they can't cover is added to credits_owed, so the balance
+    never goes negative. Caller holds the ride and driver locks."""
     ride.status = RideStatus.CANCELLED.value
-    # can be earlier than the completion
-    ride.cancelled_at = cancellation.received_at
-    reason = cancellation.reason
-    cancellation.status = CancellationStatus.APPLIED.value
-    cancellation.applied_at = func.now()
+    ride.cancelled_at = cancellation.received_at  # can be earlier than the completion
+    label = f"Ride {ride.ride_id} cancelled" + (f": {cancellation.reason}" if cancellation.reason else "")
 
-    if ride.credits_remaining > 0:
-        taken_back = ride.credits_remaining
+    reversed_ = ride.credits_remaining
+    if reversed_ > 0:
         ride.credits_remaining = 0
-        text_reason = f"Ride {ride.ride_id} cancelled" + (f": {reason}" if reason else "")
         db.add(
             LedgerEntry(
                 driver_id=ride.driver_id,
                 entry_type=EntryType.REVERSAL.value,
-                amount=taken_back,
-                reason=text_reason,
+                amount=reversed_,
+                reason=label,
                 ride_id=ride.ride_id,
             )
         )
+
+    already_used = ride.credits - reversed_
+    recovered = 0
+    if already_used > 0:
+        _, recovered = take_credits(
+            db,
+            spendable_rides(db, ride.driver_id),
+            already_used,
+            driver_id=ride.driver_id,
+            entry_type=EntryType.RECOVERY,
+            reason=f"{label} (credits already used, taken from balance)",
+            ride_id=ride.ride_id,
+        )
+    owed = already_used - recovered
+    driver.credits_owed += owed
+    if owed:
+        log.info("Driver %s owes %s credits after ride %s was cancelled", driver.id, format_credits(owed), ride.ride_id)
+
+    cancellation.status = CancellationStatus.APPLIED.value
+    cancellation.applied_at = func.now()
+    cancellation.reversed_amount = reversed_
+    cancellation.recovered_amount = recovered
+    cancellation.owed_amount = owed
+    db.flush()
+
+
+def _recover_owed(db: Session, driver: Driver) -> None:
+    """Take what the driver owes from their credits, starting with the ones just earned."""
+    _, recovered = take_credits(
+        db,
+        spendable_rides(db, driver.id),
+        driver.credits_owed,
+        driver_id=driver.id,
+        entry_type=EntryType.RECOVERY,
+        reason="Credits owed from cancelled rides, taken from new credits",
+    )
+    driver.credits_owed -= recovered
     db.flush()
 
 
 def _cancellation_resource(db: Session, cancellation: RideCancellation) -> CancellationResource:
     db.flush()
     db.refresh(cancellation)  # received_at / applied_at are set by the DB
-    ride_id = cancellation.ride_id
-    reversed_milli = db.scalar(
-        select(func.coalesce(func.sum(LedgerEntry.amount), 0)).where(
-            LedgerEntry.ride_id == ride_id, LedgerEntry.entry_type == EntryType.REVERSAL.value
-        )
-    )
-    redeemed_milli = db.scalar(
-        select(func.coalesce(func.sum(RedemptionAllocation.amount), 0)).where(
-            RedemptionAllocation.ride_id == ride_id
-        )
-    )
+    amount = lambda v: None if v is None else format_credits(v)  # noqa: E731
     return CancellationResource(
-        ride_id=ride_id,
+        ride_id=cancellation.ride_id,
         status=cancellation.status,
         reason=cancellation.reason,
         received_at=cancellation.received_at,
         applied_at=cancellation.applied_at,
-        reversed=format_credits(reversed_milli),
-        already_redeemed=format_credits(redeemed_milli),
+        reversed=amount(cancellation.reversed_amount),
+        recovered=amount(cancellation.recovered_amount),
+        owed=amount(cancellation.owed_amount),
     )
 
 

@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.core import redemption_service
+from app.services.core import credit_spending
 from tests.conftest import balance, complete, days_ago, redeem, scalar
 
 
@@ -95,14 +95,14 @@ def test_crash_halfway_through_a_redeem_leaves_no_trace(client, monkeypatch):
     def boom(**_):
         raise RuntimeError("simulated crash after spending lots")
 
-    monkeypatch.setattr(redemption_service, "LedgerEntry", boom)
+    monkeypatch.setattr(credit_spending, "LedgerEntry", boom)
     crashing = TestClient(app, raise_server_exceptions=False)
 
     assert redeem(crashing, "2.000").status_code == 500
     assert balance(client) == "3.000"
     assert scalar("SELECT credits_remaining FROM rides") == 3000
     assert scalar("SELECT count(*) FROM ledger_entries WHERE entry_type = 'debit'") == 0
-    assert scalar("SELECT count(*) FROM redemption_allocations") == 0
+    assert scalar("SELECT count(*) FROM credit_allocations") == 0
 
 
 def test_unknown_driver_gets_404(client):
