@@ -11,7 +11,7 @@
 ## Data model
 
 - `drivers` (`id`, `credits_owed`): the row that gets locked.
-- `rides` (`ride_id` PK, `credits`, `credits_remaining`, `expires_at`, `status`): the primary key makes a duplicate event impossible to store; `CHECK 0 <= credits_remaining <= credits`.
+- `rides` (`ride_id` PK, `credits`, `credits_remaining`, `expires_at`, `status`): the primary key makes a duplicate event impossible to store; `CHECK 0 <= credits_remaining <= credits`, and a cancelled ride must have 0 left. Only `completed` rides are ever spent from.
 - `ledger_entries`: the history: `credit | debit | reversal | recovery | debt`, amounts always positive. A trigger blocks `UPDATE`/`DELETE`, so the original entry always survives a cancellation. `UNIQUE (driver_id, idempotency_key)` plus a `request_hash`.
 - `credit_allocations`: how much each debit or recovery took from each ride (the FIFO trail).
 - `ride_cancellations`: `pending | applied`, with no FK to `rides`, because a cancellation can arrive first.
