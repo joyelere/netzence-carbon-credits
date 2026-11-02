@@ -1,0 +1,16 @@
+openapi: "3.0.0"
+info:
+  title: Netzence Carbon Credits
+  description: Records EV-ride carbon credits and lets drivers redeem them. (Live, auto-generated docs are also at http://localhost:8000/docs)
+  version: "1.0"
+servers:
+  - url: http://localhost:8000
+    description: Development environment
+paths:
+  /health:
+    get:
+      tags: ["System"]
+      summary: Health check
+      responses:
+        200:
+          description: Service is up

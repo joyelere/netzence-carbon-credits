@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: netzence
+      POSTGRES_PASSWORD: netzence
+      POSTGRES_DB: netzence
+    ports:
+      - "${FORWARD_DB_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # creates the separate netzence_test database used by pytest
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netzence -d netzence"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://netzence:netzence@db:5432/netzence
+      TEST_DATABASE_URL: postgresql+psycopg://netzence:netzence@db:5432/netzence_test
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  swagger:
+    image: swaggerapi/swagger-ui:v5.17.14
+    ports:
+      - "${SWAGGER_PORT:-9000}:8080"
+    volumes:
+      - ./openapi.yml:/usr/local/openapi.yml:ro
+    environment:
+      SWAGGER_JSON: /usr/local/openapi.yml
+
+volumes:
+  pgdata:
