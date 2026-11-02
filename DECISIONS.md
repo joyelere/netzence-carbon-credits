@@ -21,7 +21,7 @@
 ## The open questions
 
 - **Cancellation before completion:** stored as `pending` (202) and applied in the same transaction as the completion when it arrives. Rejecting it with an error would rely on the ride service retrying; if it gave up, a refunded ride would keep its credits. Pending rows never affect a balance, are never auto-deleted, and ones older than 48 hours are listed at `/rides/cancellations/pending` and logged.
-- **Rounding:** integers in milli-credits (1 = 1 g CO2), rounded down at 0.12 credits/km, returned as strings. No floating point anywhere.
+- **Rounding:** integers in milli-credits (1 = 1 g CO2), rounded down, returned as strings. Only electric rides earn, at 0.12 credits/km (assumptions in the README). No floating point anywhere.
 - **Crash halfway:** each request is one transaction, so it is all or nothing (a test injects a failure after credits were deducted: nothing is saved). Ride events are idempotent on `ride_id`. Redeem retries are safe with an `Idempotency-Key`, stored with a SHA-256 fingerprint of the body; reusing a key with a different body returns 409. Without a key, the server can't tell a retry from a second redemption, so that guarantee needs the client.
 
 ## With two more days
