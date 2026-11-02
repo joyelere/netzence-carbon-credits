@@ -14,6 +14,10 @@ test:
 migrate:
 	docker compose exec api alembic upgrade head
 
+# regenerate openapi.yml from the code
+openapi:
+	docker compose run --rm -T --no-deps api python -c "from scripts.export_openapi import render; print(render(), end='')" > openapi.yml
+
 # create a dated migration file: make migration name=create_x_table
 migration:
 	docker compose exec api alembic revision -m "$(name)" --rev-id "$$(date +%Y_%m_%d_%H%M%S)"

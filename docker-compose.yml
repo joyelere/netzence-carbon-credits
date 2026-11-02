@@ -31,14 +31,6 @@ services:
         condition: service_healthy
     restart: on-failure
 
-  swagger:
-    image: swaggerapi/swagger-ui:v5.17.14
-    ports:
-      - "${SWAGGER_PORT:-9000}:8080"
-    volumes:
-      - ./openapi.yml:/usr/local/openapi.yml:ro
-    environment:
-      SWAGGER_JSON: /usr/local/openapi.yml
 
   # DB GUI (like phpMyAdmin) — server: db, user/pass/db: netzence
   adminer:

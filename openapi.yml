@@ -1,353 +1,360 @@
-openapi: "3.0.0"
+openapi: 3.1.0
 info:
   title: Netzence Carbon Credits
-  description: Records EV-ride carbon credits and lets drivers redeem them. (Live, auto-generated docs are also at http://localhost:8000/docs)
-  version: "1.0"
-servers:
-  - url: http://localhost:8000
-    description: Development environment
+  version: 1.0.0
 paths:
-  /health:
-    get:
-      tags: ["System"]
-      summary: Health check
-      responses:
-        200:
-          description: Service is up
-
-  #############################
-  #### RIDE EVENTS ####
-  #############################
   /rides/completed:
     post:
-      tags: ["Rides"]
+      tags:
+      - Rides
       summary: Record a completed ride and award credits
-      description: |
-        Idempotent on ride_id. Electric rides earn 0.12 credits/km (1 credit = 1 kg CO2 avoided);
-        other vehicle types are recorded with 0 credits. Credits expire 12 months after completed_at.
+      description: Idempotent on ride_id. Electric rides earn 0.12 credits/km, valid
+        12 months.
+      operationId: completed_rides_completed_post
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RideCompletedRequest"
+              $ref: '#/components/schemas/RideCompletedRequest'
+        required: true
       responses:
-        201:
+        '200':
+          description: 'Duplicate event: already recorded, nothing changed'
+          content:
+            application/json:
+              schema: {}
+        '201':
           description: Ride recorded, credits awarded
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RideEnvelope" }
-        200:
-          description: Duplicate event - already recorded, nothing changed
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RideEnvelope" }
-        409:
+        '409':
           description: Same ride_id already recorded with different details
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        422:
-          description: Validation errors
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        500:
-          description: Server error. Report to developer
-
+        '422':
+          description: Validation failed
   /rides/cancelled:
     post:
-      tags: ["Rides"]
-      summary: Reverse a ride's credits (refunded or cancelled after completion)
-      description: |
-        The original credit entry stays in history; a "reversal" entry takes back the ride's
-        unspent credits. Credits the ride had already used are taken from the driver's other
-        credits ("recovery" entry); whatever they can't cover is owed and taken from the next
-        credits they earn. The balance never goes negative.
-        If the cancellation arrives before the completion event it is stored (202) and the
-        ride is reversed the moment its completion arrives. Idempotent on ride_id.
+      tags:
+      - Rides
+      summary: Reverse a ride's credits (refunded/cancelled after completion)
+      description: 'Reverses the ride''s unspent credits; the original entry stays
+        in history.
+
+        If the ride hasn''t arrived yet, the cancellation is kept as pending (202).'
+      operationId: cancelled_rides_cancelled_post
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [ride_id]
-              properties:
-                ride_id: { type: string, example: "ride_001" }
-                reason: { type: string, nullable: true, example: "Refunded to passenger" }
+              $ref: '#/components/schemas/RideCancelledRequest'
+        required: true
       responses:
-        200:
-          description: Reversed, or duplicate event (already processed)
+        '200':
+          description: 'Reversed, or duplicate event: already processed'
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  message: { type: string, example: "Ride cancelled; unspent credits reversed." }
-                  data: { $ref: "#/components/schemas/Cancellation" }
-        202:
-          description: Completion not seen yet; credits will be reversed when it arrives
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message: { type: string }
-                  data: { $ref: "#/components/schemas/Cancellation" }
-        422:
-          description: Validation errors
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
+              schema: {}
+        '202':
+          description: 'Ride not completed yet: stored as pending, reversed when it
+            arrives'
+        '422':
+          description: Validation failed
   /rides/cancellations/pending:
     get:
-      tags: ["Rides"]
+      tags:
+      - Rides
       summary: Cancellations still waiting for their ride's completion
-      description: |
-        Cancellations received more than older_than_hours ago whose ride has never completed.
-        They affect no balance. A long wait usually means the ride service sent a cancellation
-        for a ride that never completed. They are never auto-deleted: if the completion does
-        arrive, its credits are still reversed.
+      description: Pending cancellations whose ride still hasn't arrived after `older_than_hours`.
+      operationId: pending_cancellations_rides_cancellations_pending_get
       parameters:
-        - { name: older_than_hours, in: query, schema: { type: integer, default: 48, minimum: 0 } }
-        - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
-        - { name: per_page, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: per_page
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Per Page
+      - name: older_than_hours
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 8760
+          minimum: 0
+          default: 48
+          title: Older Than Hours
       responses:
-        200:
-          description: Pending cancellations fetched
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message: { type: string, example: "Pending cancellations fetched successfully." }
-                  data:
-                    type: object
-                    properties:
-                      older_than_hours: { type: integer, example: 48 }
-                      cancellations:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            ride_id: { type: string }
-                            reason: { type: string, nullable: true }
-                            received_at: { type: string, format: date-time }
-                            waiting_hours: { type: number, example: 72.0 }
-                      pagination:
-                        type: object
-                        properties:
-                          current_page: { type: integer }
-                          per_page: { type: integer }
-                          total: { type: integer }
-                          last_page: { type: integer }
-
-  #############################
-  #### DRIVERS ####
-  #############################
+                $ref: '#/components/schemas/HTTPValidationError'
   /drivers/{driver_id}/balance:
     get:
-      tags: ["Drivers"]
-      summary: Current balance (unexpired, unspent credits only)
+      tags:
+      - Drivers
+      summary: Current balance (unexpired credits only)
+      description: Unexpired, unspent credits only.
+      operationId: balance_drivers__driver_id__balance_get
       parameters:
-        - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
+      - name: driver_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Driver Id
       responses:
-        200:
-          description: Balance fetched
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: Driver has no recorded rides
+        '422':
+          description: Validation Error
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message: { type: string, example: "Balance fetched successfully." }
-                  data: { $ref: "#/components/schemas/Balance" }
-        404:
-          description: Driver has no recorded rides
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+                $ref: '#/components/schemas/HTTPValidationError'
   /drivers/{driver_id}/history:
     get:
-      tags: ["Drivers"]
-      summary: Every credit and debit with its reason (newest first, paginated)
-      description: |
-        Stored ledger entries (credit, debit, reversal), newest first. Credit lines also show
-        what has happened to those credits so far: amount = used + recovered + expired + reversed + remaining.
+      tags:
+      - Drivers
+      summary: Every credit and debit with its reason
+      description: Every credit, debit and reversal with its reason, newest first.
+      operationId: history_drivers__driver_id__history_get
       parameters:
-        - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
-        - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
-        - { name: per_page, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+      - name: driver_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Driver Id
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: per_page
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Per Page
       responses:
-        200:
-          description: History fetched
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: Driver has no recorded rides
+        '422':
+          description: Validation Error
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message: { type: string, example: "History fetched successfully." }
-                  data: { $ref: "#/components/schemas/History" }
-        404:
-          description: Driver has no recorded rides
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
+                $ref: '#/components/schemas/HTTPValidationError'
   /drivers/{driver_id}/redeem:
     post:
-      tags: ["Drivers"]
+      tags:
+      - Drivers
       summary: Spend credits (oldest expiry first)
-      description: |
-        Locks the driver row (SELECT ... FOR UPDATE) so simultaneous redeems run one at a time
-        and can never take the balance below zero. Spends unexpired credits oldest-expiry first.
-        Send an Idempotency-Key header to make retries safe: the key is stored with a SHA-256
-        fingerprint of the body; a retry with the same key and body returns the original result
-        (200), the same key with a different body is refused (409).
+      description: Spend credits, soonest-expiring first. Never takes the balance
+        below zero.
+      operationId: redeem_drivers__driver_id__redeem_post
       parameters:
-        - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
-        - name: Idempotency-Key
-          in: header
-          required: false
-          schema: { type: string, maxLength: 128 }
-          example: "redeem-7f3a"
-          description: Optional. Generate one per redeem attempt; resend it with the same body only when retrying after no response. The redeem then happens only once.
+      - name: driver_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Driver Id
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 128
+          - type: 'null'
+          description: Optional. Generate one per redeem attempt and resend it, with
+            the same body, only when retrying after no response. The redeem then happens
+            only once.
+          title: Idempotency-Key
+        description: Optional. Generate one per redeem attempt and resend it, with
+          the same body, only when retrying after no response. The redeem then happens
+          only once.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [amount]
-              properties:
-                amount: { type: string, example: "2.000", description: "> 0, max 3 decimal places" }
-                reason: { type: string, nullable: true, example: "Charging voucher" }
+              $ref: '#/components/schemas/RedeemRequest'
       responses:
-        201:
+        '200':
+          description: 'Idempotent replay: this redemption already happened'
+          content:
+            application/json:
+              schema: {}
+        '201':
           description: Redeemed
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message: { type: string, example: "Redemption created successfully." }
-                  data: { $ref: "#/components/schemas/Redemption" }
-        200:
-          description: Idempotent replay - already processed, nothing spent
-        404:
+        '404':
           description: Driver has no recorded rides
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        409:
+        '409':
           description: Idempotency-Key reused with a different request body
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        422:
+        '422':
           description: Insufficient balance, or validation failed
+  /health:
+    get:
+      tags:
+      - System
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
+              schema: {}
 components:
   schemas:
-    Error:
-      type: object
+    HTTPValidationError:
       properties:
-        message: { type: string }
-        errors: { type: array, items: { type: object } }
-    RideCompletedRequest:
-      type: object
-      required: [ride_id, driver_id, distance_km, vehicle_type, completed_at]
-      properties:
-        ride_id: { type: string, example: "ride_001" }
-        driver_id: { type: string, example: "driver_42" }
-        distance_km: { type: number, minimum: 0, example: 12.5, description: "Max 3 decimal places" }
-        vehicle_type: { type: string, enum: [electric, hybrid, petrol, diesel] }
-        completed_at: { type: string, format: date-time, example: "2026-10-01T09:30:00Z", description: "Must include a timezone" }
-    Ride:
-      type: object
-      properties:
-        ride_id: { type: string }
-        driver_id: { type: string }
-        distance_km: { type: string, example: "12.500" }
-        vehicle_type: { type: string }
-        status: { type: string, enum: [completed, cancelled] }
-        credits: { type: string, example: "1.500", description: "Decimal string, 3 dp - never a float" }
-        completed_at: { type: string, format: date-time }
-        expires_at: { type: string, format: date-time }
-    RideEnvelope:
-      type: object
-      properties:
-        message: { type: string, example: "Ride created successfully." }
-        data: { $ref: "#/components/schemas/Ride" }
-
-    Balance:
-      type: object
-      properties:
-        driver_id: { type: string }
-        balance: { type: string, example: "2.700" }
-        owed: { type: string, example: "0.000", description: "Credits owed from cancelled rides; taken from the next credits earned" }
-        next_expiry_at: { type: string, format: date-time, nullable: true }
-        next_expiry_amount: { type: string, nullable: true, example: "1.500" }
-    HistoryEntry:
-      type: object
-      properties:
-        id: { type: integer }
-        type: { type: string, enum: [credit, debit, reversal, recovery, debt], description: "debt = used credits of a cancelled ride the driver couldn't cover yet; recovery = credits taken to cover them" }
-        amount: { type: string, example: "1.500", description: "Always positive; type gives the direction" }
-        reason: { type: string, example: "Ride ride_001 completed (12.5 km, electric)" }
-        ride_id: { type: string, nullable: true }
-        occurred_at: { type: string, format: date-time, description: "When it happened (credits use the ride's completed_at)" }
-        recorded_at: { type: string, format: date-time, description: "When this service saved it" }
-        status: { type: string, nullable: true, enum: [active, partially_used, used, expired, reversed], description: "Credit lines only" }
-        expires_at: { type: string, format: date-time, nullable: true, description: "Credit lines only" }
-        used: { type: string, nullable: true, example: "0.500", description: "Credit lines only: redeemed from this ride" }
-        recovered: { type: string, nullable: true, example: "0.000", description: "Credit lines only: used to cover credits owed from cancelled rides" }
-        expired: { type: string, nullable: true, example: "0.000", description: "Credit lines only: ran out unused at expires_at" }
-        reversed: { type: string, nullable: true, example: "0.000", description: "Credit lines only: taken back because the ride was cancelled" }
-        remaining: { type: string, nullable: true, example: "0.700", description: "Credit lines only: still spendable" }
-    History:
-      type: object
-      properties:
-        driver_id: { type: string }
-        balance: { type: string }
-        entries: { type: array, items: { $ref: "#/components/schemas/HistoryEntry" } }
-        pagination:
-          type: object
-          properties:
-            current_page: { type: integer, example: 1 }
-            per_page: { type: integer, example: 20 }
-            total: { type: integer, example: 4 }
-            last_page: { type: integer, example: 1 }
-    Redemption:
-      type: object
-      properties:
-        redemption_id: { type: integer, description: "Id of the redemption's debit entry in the history" }
-        driver_id: { type: string }
-        amount: { type: string, example: "2.000" }
-        reason: { type: string, nullable: true }
-        balance_after: { type: string, example: "0.700" }
-        consumed:
-          type: array
-          description: Which rides' credits were used, oldest expiry first
+        detail:
           items:
-            type: object
-            properties:
-              ride_id: { type: string }
-              amount: { type: string }
-              expires_at: { type: string, format: date-time }
-        created_at: { type: string, format: date-time }
-    Cancellation:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
       type: object
+      title: HTTPValidationError
+    RedeemRequest:
       properties:
-        ride_id: { type: string }
-        status: { type: string, enum: [pending, applied], description: "pending = ride not completed yet, nothing reversed" }
-        reason: { type: string, nullable: true }
-        received_at: { type: string, format: date-time }
-        applied_at: { type: string, format: date-time, nullable: true, description: "When the credits were reversed; null while pending" }
-        reversed: { type: string, nullable: true, example: "1.000", description: "The ride's own unspent credits (null while pending)" }
-        recovered: { type: string, nullable: true, example: "0.000", description: "Already-used credits taken from the driver's other credits" }
-        owed: { type: string, nullable: true, example: "2.000", description: "Already-used credits the driver couldn't cover; taken from their next credits" }
+        amount:
+          anyOf:
+          - type: number
+            exclusiveMinimum: 0.0
+          - type: string
+          title: Amount
+        reason:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Reason
+      type: object
+      required:
+      - amount
+      title: RedeemRequest
+      example:
+        amount: '2.000'
+        reason: Charging voucher
+    RideCancelledRequest:
+      properties:
+        ride_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Ride Id
+        reason:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Reason
+      type: object
+      required:
+      - ride_id
+      title: RideCancelledRequest
+      example:
+        reason: Refunded to passenger
+        ride_id: ride_001
+    RideCompletedRequest:
+      properties:
+        ride_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Ride Id
+        driver_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Driver Id
+        distance_km:
+          anyOf:
+          - type: number
+            maximum: 10000.0
+            minimum: 0.0
+          - type: string
+          title: Distance Km
+        vehicle_type:
+          $ref: '#/components/schemas/VehicleType'
+        completed_at:
+          type: string
+          format: date-time
+          title: Completed At
+      type: object
+      required:
+      - ride_id
+      - driver_id
+      - distance_km
+      - vehicle_type
+      - completed_at
+      title: RideCompletedRequest
+      example:
+        completed_at: '2026-10-01T09:30:00Z'
+        distance_km: 12.5
+        driver_id: driver_42
+        ride_id: ride_001
+        vehicle_type: electric
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    VehicleType:
+      type: string
+      enum:
+      - electric
+      - hybrid
+      - petrol
+      - diesel
+      title: VehicleType
