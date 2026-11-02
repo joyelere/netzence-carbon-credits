@@ -18,9 +18,9 @@ class AppException(Exception):
 class InsufficientBalanceException(AppException):
     status_code = 422
 
-    def __init__(self, available: int, requested: int):
+    def __init__(self, available: str, requested: str):
         super().__init__(
-            f"Insufficient balance: available {available}, requested {requested}."
+            f"Insufficient balance: available {available} credits, requested {requested}."
         )
 
 
@@ -38,3 +38,12 @@ class DriverNotFoundException(AppException):
 
     def __init__(self, driver_id: str):
         super().__init__(f"Driver {driver_id} not found.")
+
+
+class IdempotencyConflictException(AppException):
+    status_code = 409
+
+    def __init__(self, key: str):
+        super().__init__(
+            f"Idempotency key '{key}' was already used for a different redemption."
+        )

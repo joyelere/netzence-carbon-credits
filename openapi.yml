@@ -84,8 +84,8 @@ paths:
       tags: ["Drivers"]
       summary: Every credit and debit with its reason (newest first, paginated)
       description: |
-        Stored ledger entries (credit, debit, reversal) plus computed "expiry" lines for
-        credits that expired unused. Summing all entries equals the balance.
+        Stored ledger entries (credit, debit, reversal), newest first. Credit lines also show
+        what has happened to those credits so far: amount = used + expired + remaining.
       parameters:
         - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
         - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
@@ -102,6 +102,60 @@ paths:
                   data: { $ref: "#/components/schemas/History" }
         404:
           description: Driver has no recorded rides
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /drivers/{driver_id}/redeem:
+    post:
+      tags: ["Drivers"]
+      summary: Spend credits (oldest expiry first)
+      description: |
+        Locks the driver row (SELECT ... FOR UPDATE) so simultaneous redeems run one at a time
+        and can never take the balance below zero. Spends unexpired credits oldest-expiry first.
+        Send an Idempotency-Key header to make retries safe.
+      parameters:
+        - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 128 }
+          example: "redeem-7f3a"
+          description: Optional. Reuse the same value when retrying and the redeem happens only once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                amount: { type: string, example: "2.000", description: "> 0, max 3 decimal places" }
+                reason: { type: string, nullable: true, example: "Charging voucher" }
+      responses:
+        201:
+          description: Redeemed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Redemption created successfully." }
+                  data: { $ref: "#/components/schemas/Redemption" }
+        200:
+          description: Idempotent replay - already processed, nothing spent
+        404:
+          description: Driver has no recorded rides
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        409:
+          description: Idempotency key reused with a different amount
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        422:
+          description: Insufficient balance, or validation failed
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -149,14 +203,19 @@ components:
     HistoryEntry:
       type: object
       properties:
-        id: { type: integer, nullable: true, description: "null for computed expiry lines" }
-        type: { type: string, enum: [credit, debit, reversal, expiry] }
-        amount: { type: string, example: "+1.500" }
+        id: { type: integer }
+        type: { type: string, enum: [credit, debit, reversal] }
+        amount: { type: string, example: "1.500", description: "Always positive; type gives the direction" }
         reason: { type: string, example: "Ride ride_001 completed (12.5 km, electric)" }
         ride_id: { type: string, nullable: true }
         redemption_id: { type: integer, nullable: true }
         occurred_at: { type: string, format: date-time, description: "When it happened (credits use the ride's completed_at)" }
-        recorded_at: { type: string, format: date-time, description: "When this service recorded it" }
+        recorded_at: { type: string, format: date-time, description: "When this service saved it" }
+        status: { type: string, nullable: true, enum: [active, partially_used, used, expired, reversed], description: "Credit lines only" }
+        expires_at: { type: string, format: date-time, nullable: true, description: "Credit lines only" }
+        used: { type: string, nullable: true, example: "0.500", description: "Credit lines only: redeemed from this ride" }
+        expired: { type: string, nullable: true, example: "0.000", description: "Credit lines only: ran out unused at expires_at" }
+        remaining: { type: string, nullable: true, example: "0.700", description: "Credit lines only: still spendable" }
     History:
       type: object
       properties:
@@ -170,3 +229,21 @@ components:
             per_page: { type: integer, example: 20 }
             total: { type: integer, example: 4 }
             last_page: { type: integer, example: 1 }
+    Redemption:
+      type: object
+      properties:
+        redemption_id: { type: integer }
+        driver_id: { type: string }
+        amount: { type: string, example: "2.000" }
+        reason: { type: string, nullable: true }
+        balance_after: { type: string, example: "0.700" }
+        consumed:
+          type: array
+          description: Which rides' credits were used, oldest expiry first
+          items:
+            type: object
+            properties:
+              ride_id: { type: string }
+              amount: { type: string }
+              expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }

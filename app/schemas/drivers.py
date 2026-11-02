@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.enums import EntryType
+from app.enums import CreditStatus, EntryType
 
 
 class BalanceResource(BaseModel):
@@ -15,14 +15,20 @@ class BalanceResource(BaseModel):
 
 
 class HistoryEntryResource(BaseModel):
-    id: int | None          # None for computed expiry lines
+    id: int
     type: EntryType
-    amount: str             # signed: "+1.500", "-0.700"
+    amount: str             # always positive, e.g. "1.500"; `type` gives the direction
     reason: str
     ride_id: str | None
     redemption_id: int | None
-    occurred_at: datetime   # when it happened (credits: the ride's completed_at)
-    recorded_at: datetime   # when this service recorded it
+    occurred_at: datetime         # when it happened (credits: the ride's completed_at)
+    recorded_at: datetime         # when this service saved it
+    # Credit lines only (null on others): what has happened to these credits so far
+    status: CreditStatus | None = None
+    expires_at: datetime | None = None
+    used: str | None = None        # redeemed from this ride's credits
+    expired: str | None = None     # ran out unused at expires_at
+    remaining: str | None = None   # still spendable now
 
 
 class Pagination(BaseModel):

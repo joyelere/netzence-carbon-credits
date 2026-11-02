@@ -96,7 +96,7 @@ class LotConsumption(Base):
 
 class LedgerEntry(Base):
     """Append-only history. Never UPDATEd or DELETEd: corrections are new rows.
-    amount is signed: credit > 0, debit/reversal < 0."""
+    amount is always positive; entry_type says whether it adds or subtracts."""
 
     __tablename__ = "ledger_entries"
 
