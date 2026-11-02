@@ -163,8 +163,17 @@ def _apply_reversal(db: Session, ride: Ride, cancellation: RideCancellation, dri
             ride_id=ride.ride_id,
         )
     owed = already_used - recovered
-    driver.credits_owed += owed
     if owed:
+        driver.credits_owed += owed
+        db.add(
+            LedgerEntry(
+                driver_id=ride.driver_id,
+                entry_type=EntryType.DEBT.value,
+                amount=owed,
+                reason=f"{label}: {format_credits(owed)} already used, to be taken from future credits",
+                ride_id=ride.ride_id,
+            )
+        )
         log.info("Driver %s owes %s credits after ride %s was cancelled", driver.id, format_credits(owed), ride.ride_id)
 
     cancellation.status = CancellationStatus.APPLIED.value

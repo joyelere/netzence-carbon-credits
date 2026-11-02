@@ -100,9 +100,34 @@ def test_every_credit_line_and_the_owed_total_add_up(client):
         parts = sum(float(e[k]) for k in ("used", "recovered", "expired", "reversed", "remaining"))
         assert parts == pytest.approx(float(e["amount"])), e["ride_id"]
 
-    owed_total = scalar("SELECT coalesce(sum(owed_amount), 0) FROM ride_cancellations")
-    repaid_later = scalar(
+    # what is owed = debt lines - recoveries that paid debt back
+    debts = scalar("SELECT coalesce(sum(amount), 0) FROM ledger_entries WHERE entry_type = 'debt'")
+    repaid = scalar(
         "SELECT coalesce(sum(amount), 0) FROM ledger_entries WHERE entry_type = 'recovery' AND ride_id IS NULL"
     )
-    assert scalar("SELECT credits_owed FROM drivers") == owed_total - repaid_later
+    assert scalar("SELECT credits_owed FROM drivers") == debts - repaid
+    assert debts == scalar("SELECT coalesce(sum(owed_amount), 0) FROM ride_cancellations")
     assert float(balance(client)) >= 0
+
+
+def test_history_shows_where_a_debt_came_from_and_when_it_was_repaid(client):
+    complete(client, "r1", km=25, completed_at=days_ago(20))  # 3.000
+    redeem(client, "2.000")
+    cancel(client, "r1", reason="Fraud")
+    complete(client, "r2", km=25, completed_at=days_ago(1))
+
+    lines = [(e["type"], e["amount"]) for e in history(client)["entries"] if e["type"] != "credit"]
+
+    assert lines == [("recovery", "2.000"), ("debt", "2.000"), ("reversal", "1.000"), ("debit", "2.000")]
+    debt = next(e for e in history(client)["entries"] if e["type"] == "debt")
+    assert debt["ride_id"] == "r1"
+    assert "2.000 already used" in debt["reason"]
+
+
+def test_no_debt_line_when_everything_is_covered(client):
+    complete(client, "r1", km=25, completed_at=days_ago(20))
+    complete(client, "r2", km=50, completed_at=days_ago(10))
+    redeem(client, "2.000")
+    cancel(client, "r1")
+
+    assert "debt" not in [e["type"] for e in history(client)["entries"]]

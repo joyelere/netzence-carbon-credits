@@ -296,7 +296,7 @@ components:
       type: object
       properties:
         id: { type: integer }
-        type: { type: string, enum: [credit, debit, reversal, recovery] }
+        type: { type: string, enum: [credit, debit, reversal, recovery, debt], description: "debt = used credits of a cancelled ride the driver couldn't cover yet; recovery = credits taken to cover them" }
         amount: { type: string, example: "1.500", description: "Always positive; type gives the direction" }
         reason: { type: string, example: "Ride ride_001 completed (12.5 km, electric)" }
         ride_id: { type: string, nullable: true }

@@ -6,6 +6,7 @@ class EntryType(str, Enum):
     DEBIT = "debit"        # redemption
     REVERSAL = "reversal"  # ride cancelled
     RECOVERY = "recovery"  # covers credits a cancelled ride had already used
+    DEBT = "debt"          # used credits that couldn't be covered yet (owed)
 
     @classmethod
     def values(cls) -> list[str]:
