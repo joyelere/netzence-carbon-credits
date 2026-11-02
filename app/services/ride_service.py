@@ -4,14 +4,19 @@ Every public function runs in ONE database transaction: either everything is
 saved or nothing is (crash halfway = automatic rollback).
 """
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.enums import EntryType, RideStatus
 from app.exceptions import RideConflictException
-from app.models import CreditLot, Driver, LedgerEntry, Ride
-from app.schemas.rides import RideCompletedRequest, RideResource
+from app.models import CreditLot, Driver, LedgerEntry, LotConsumption, Ride, RideCancellation
+from app.schemas.rides import (
+    CancellationResource,
+    RideCancelledRequest,
+    RideCompletedRequest,
+    RideResource,
+)
 from app.services.credit_policy import calculate_credits_milli, expiry_for, format_credits
 
 
@@ -85,7 +90,88 @@ def record_completed_ride(db: Session, data: RideCompletedRequest) -> tuple[Ride
             db.flush()
 
         ride = db.get(Ride, data.ride_id)
+
+        # The cancellation arrived first: record the credit (history keeps the
+        # original entry) and reverse it straight away in the same transaction.
+        early_cancel = db.get(RideCancellation, data.ride_id)
+        if early_cancel is not None:
+            _apply_reversal(db, ride, early_cancel.reason)
+
         return _to_resource(db, ride), True
+
+
+def record_cancellation(db: Session, data: RideCancelledRequest) -> tuple[CancellationResource, bool]:
+    """Returns (cancellation, created). created=False means a duplicate event."""
+    with db.begin():
+        lock_ride_id(db, data.ride_id)
+
+        previous = db.get(RideCancellation, data.ride_id)
+        if previous is not None:
+            return _cancellation_resource(db, data.ride_id, previous.reason), False
+
+        db.add(RideCancellation(ride_id=data.ride_id, reason=data.reason))
+        db.flush()
+
+        ride = db.get(Ride, data.ride_id)
+        if ride is not None:
+            lock_driver(db, ride.driver_id)
+            _apply_reversal(db, ride, data.reason)
+
+        return _cancellation_resource(db, data.ride_id, data.reason), True
+
+
+def _apply_reversal(db: Session, ride: Ride, reason: str | None) -> None:
+    """Mark the ride cancelled and take back its UNSPENT credits.
+
+    The original credit entry is never touched; a new 'reversal' entry is added.
+    Credits already redeemed are not clawed back (that would push the balance
+    below zero); they are reported as already_redeemed instead.
+    Caller must hold the ride and driver locks.
+    """
+    ride.status = RideStatus.CANCELLED.value
+    ride.cancelled_at = func.now()
+
+    lot = db.scalar(select(CreditLot).where(CreditLot.ride_id == ride.ride_id))
+    if lot is not None and lot.remaining > 0:
+        taken_back = lot.remaining
+        lot.remaining = 0
+        text_reason = f"Ride {ride.ride_id} cancelled" + (f": {reason}" if reason else "")
+        db.add(
+            LedgerEntry(
+                driver_id=ride.driver_id,
+                entry_type=EntryType.REVERSAL.value,
+                amount=taken_back,
+                reason=text_reason,
+                ride_id=ride.ride_id,
+                lot_id=lot.id,
+            )
+        )
+    db.flush()
+
+
+def _cancellation_resource(db: Session, ride_id: str, reason: str | None) -> CancellationResource:
+    ride = db.get(Ride, ride_id)
+    if ride is None:
+        return CancellationResource(
+            ride_id=ride_id, state="pending", reason=reason, reversed="0.000", already_redeemed="0.000"
+        )
+    reversed_milli = db.scalar(
+        select(func.coalesce(func.sum(LedgerEntry.amount), 0)).where(
+            LedgerEntry.ride_id == ride_id, LedgerEntry.entry_type == EntryType.REVERSAL.value
+        )
+    )
+    redeemed_milli = db.scalar(
+        select(func.coalesce(func.sum(LotConsumption.amount), 0))
+        .join(CreditLot, CreditLot.id == LotConsumption.lot_id)
+        .where(CreditLot.ride_id == ride_id)
+    )
+    return CancellationResource(
+        ride_id=ride_id,
+        state="applied",
+        reason=reason,
+        reversed=format_credits(reversed_milli),
+        already_redeemed=format_credits(redeemed_milli),
+    )
 
 
 def _ensure_same_event(existing: Ride, data: RideCompletedRequest) -> None:

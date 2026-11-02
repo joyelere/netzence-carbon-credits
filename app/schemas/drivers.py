@@ -28,6 +28,7 @@ class HistoryEntryResource(BaseModel):
     expires_at: datetime | None = None
     used: str | None = None        # redeemed from this ride's credits
     expired: str | None = None     # ran out unused at expires_at
+    reversed: str | None = None    # taken back because the ride was cancelled
     remaining: str | None = None   # still spendable now
 
 

@@ -55,6 +55,51 @@ paths:
         500:
           description: Server error. Report to developer
 
+  /rides/cancelled:
+    post:
+      tags: ["Rides"]
+      summary: Reverse a ride's credits (refunded or cancelled after completion)
+      description: |
+        The original credit entry stays in history; a new "reversal" entry takes back the
+        ride's UNSPENT credits. Credits already redeemed are not clawed back (the balance never
+        goes negative) and are reported as already_redeemed.
+        If the cancellation arrives before the completion event it is stored (202) and the
+        ride is reversed the moment its completion arrives. Idempotent on ride_id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ride_id]
+              properties:
+                ride_id: { type: string, example: "ride_001" }
+                reason: { type: string, nullable: true, example: "Refunded to passenger" }
+      responses:
+        200:
+          description: Reversed, or duplicate event (already processed)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Ride cancelled; unspent credits reversed." }
+                  data: { $ref: "#/components/schemas/Cancellation" }
+        202:
+          description: Completion not seen yet; credits will be reversed when it arrives
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  data: { $ref: "#/components/schemas/Cancellation" }
+        422:
+          description: Validation errors
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   #############################
   #### DRIVERS ####
   #############################
@@ -85,7 +130,7 @@ paths:
       summary: Every credit and debit with its reason (newest first, paginated)
       description: |
         Stored ledger entries (credit, debit, reversal), newest first. Credit lines also show
-        what has happened to those credits so far: amount = used + expired + remaining.
+        what has happened to those credits so far: amount = used + expired + reversed + remaining.
       parameters:
         - { name: driver_id, in: path, required: true, schema: { type: string }, example: driver_42 }
         - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
@@ -215,6 +260,7 @@ components:
         expires_at: { type: string, format: date-time, nullable: true, description: "Credit lines only" }
         used: { type: string, nullable: true, example: "0.500", description: "Credit lines only: redeemed from this ride" }
         expired: { type: string, nullable: true, example: "0.000", description: "Credit lines only: ran out unused at expires_at" }
+        reversed: { type: string, nullable: true, example: "0.000", description: "Credit lines only: taken back because the ride was cancelled" }
         remaining: { type: string, nullable: true, example: "0.700", description: "Credit lines only: still spendable" }
     History:
       type: object
@@ -247,3 +293,11 @@ components:
               amount: { type: string }
               expires_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
+    Cancellation:
+      type: object
+      properties:
+        ride_id: { type: string }
+        state: { type: string, enum: [applied, pending] }
+        reason: { type: string, nullable: true }
+        reversed: { type: string, example: "1.000", description: "Unspent credits taken back" }
+        already_redeemed: { type: string, example: "2.000", description: "Spent before the cancellation; not clawed back" }

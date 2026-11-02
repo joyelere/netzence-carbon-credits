@@ -44,3 +44,22 @@ class RideResource(BaseModel):
     credits: str  # e.g. "1.500" — string so JSON never carries a float
     completed_at: datetime
     expires_at: datetime | None
+
+
+class RideCancelledRequest(BaseModel):
+    ride_id: str = Id
+    reason: str | None = Field(default=None, max_length=255)
+
+    model_config = {
+        "json_schema_extra": {"example": {"ride_id": "ride_001", "reason": "Refunded to passenger"}}
+    }
+
+
+class CancellationResource(BaseModel):
+    ride_id: str
+    # applied: credits reversed now.
+    # pending: completion not seen yet; it will be reversed the moment it arrives.
+    state: str
+    reason: str | None
+    reversed: str            # unspent credits taken back
+    already_redeemed: str    # spent before the cancellation; not clawed back

@@ -55,8 +55,8 @@ def get_balance(db: Session, driver_id: str) -> BalanceResource:
 
 # History = the stored ledger (credits, debits, reversals), newest first.
 # Credit lines also carry their lot's live state (status, used, expired,
-# remaining) so each one explains itself: amount = used + expired + remaining
-# (+ reversed, once a ride is cancelled).
+# reversed, remaining) so each one explains itself:
+# amount = used + expired + reversed + remaining
 # Credits are dated by when the ride was completed (lot.earned_at), not when
 # we happened to receive the event, so the timeline reads in real-world order.
 HISTORY_ROWS = """
@@ -65,6 +65,8 @@ HISTORY_ROWS = """
            le.created_at AS recorded_at,
            cl.amount AS lot_amount, cl.remaining AS lot_remaining, cl.expires_at,
            (SELECT coalesce(sum(lc.amount), 0) FROM lot_consumptions lc WHERE lc.lot_id = cl.id) AS lot_used,
+           (SELECT coalesce(sum(rv.amount), 0) FROM ledger_entries rv
+             WHERE rv.lot_id = cl.id AND rv.entry_type = 'reversal') AS lot_reversed,
            r.status AS ride_status
       FROM ledger_entries le
       LEFT JOIN credit_lots cl ON cl.id = le.lot_id AND le.entry_type = 'credit'
@@ -135,5 +137,6 @@ def _credit_state(r, now) -> dict:
         "expires_at": r.expires_at,
         "used": format_credits(r.lot_used),
         "expired": format_credits(expired_amount),
+        "reversed": format_credits(r.lot_reversed),
         "remaining": format_credits(spendable),
     }
