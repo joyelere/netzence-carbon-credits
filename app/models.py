@@ -1,10 +1,15 @@
 """SQLAlchemy models — the Python version of app/Models/*.
 
-All credit amounts are BIGINT **milli-credits** (1 credit = 1000) so money math
-is integer-only and can never produce rounding errors.
+Five tables:
+  drivers                 one row per driver; redeem locks it (SELECT ... FOR UPDATE)
+  rides                   every ride event + the credits it earned and how many are left
+  ledger_entries          append-only history: credit / debit (= a redemption) / reversal
+  redemption_allocations  which rides' credits each redemption used (FIFO audit trail)
+  ride_cancellations      every cancellation received, including ones that arrive early
 
-The schema itself is created by Alembic migrations (alembic/versions), not by
-these classes; they only describe the tables so Python can query them.
+All credit amounts are BIGINT **milli-credits** (1 credit = 1000), like kobo.
+The schema is created by Alembic migrations (alembic/versions), not by these
+classes; they only describe the tables so Python can query them.
 """
 
 from datetime import datetime
@@ -17,7 +22,8 @@ from app.database import Base
 
 
 class Driver(Base):
-    """One row per driver. Redemptions lock this row (SELECT ... FOR UPDATE)."""
+    """Like the Wallet row you lockForUpdate(): every write to a driver's
+    credits locks this row first, so they happen one at a time."""
 
     __tablename__ = "drivers"
 
@@ -26,8 +32,13 @@ class Driver(Base):
 
 
 class Ride(Base):
-    """Every completed-ride event we accepted. ride_id is the primary key, so the
-    same event can only ever be stored once (idempotency enforced by Postgres)."""
+    """A completed-ride event and the credits it earned.
+
+    ride_id is the primary key, so the same event can only be stored once.
+    credits_remaining goes down as the driver redeems (oldest expires_at first)
+    and to 0 if the ride is cancelled.
+    Balance = SUM(credits_remaining) WHERE expires_at > now().
+    """
 
     __tablename__ = "rides"
 
@@ -36,67 +47,38 @@ class Ride(Base):
     distance_km: Mapped[Decimal] = mapped_column(Numeric(10, 3))
     vehicle_type: Mapped[str] = mapped_column(String(16))
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    credits: Mapped[int] = mapped_column(BigInteger)  # milli-credits awarded
+    credits: Mapped[int] = mapped_column(BigInteger)            # earned (milli-credits)
+    credits_remaining: Mapped[int] = mapped_column(BigInteger)  # still unspent
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class RideCancellation(Base):
-    """Every cancellation event we received — including ones that arrive BEFORE
-    the completion event. When the completion later arrives, it sees this row
-    and is recorded-then-reversed immediately."""
+    """Every cancellation event received — including ones that arrive BEFORE
+    the completion. When that completion later arrives it sees this row and is
+    recorded-then-reversed in the same transaction."""
 
     __tablename__ = "ride_cancellations"
 
     ride_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | applied
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class CreditLot(Base):
-    """A batch of credits from one ride. `remaining` goes down as it is redeemed
-    (oldest expires_at first). Balance = SUM(remaining) WHERE expires_at > now()."""
-
-    __tablename__ = "credit_lots"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    driver_id: Mapped[str] = mapped_column(ForeignKey("drivers.id"))
-    ride_id: Mapped[str] = mapped_column(ForeignKey("rides.ride_id"), unique=True)
-    amount: Mapped[int] = mapped_column(BigInteger)
-    remaining: Mapped[int] = mapped_column(BigInteger)
-    earned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class Redemption(Base):
-    """One redeem request. idempotency_key (optional) makes client retries safe."""
-
-    __tablename__ = "redemptions"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    driver_id: Mapped[str] = mapped_column(ForeignKey("drivers.id"))
-    amount: Mapped[int] = mapped_column(BigInteger)
-    idempotency_key: Mapped[str | None] = mapped_column(String(128))
-    reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class LotConsumption(Base):
-    """How much of which lot a redemption used — the audit trail for FIFO."""
-
-    __tablename__ = "lot_consumptions"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    redemption_id: Mapped[int] = mapped_column(ForeignKey("redemptions.id"))
-    lot_id: Mapped[int] = mapped_column(ForeignKey("credit_lots.id"))
-    amount: Mapped[int] = mapped_column(BigInteger)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class LedgerEntry(Base):
-    """Append-only history. Never UPDATEd or DELETEd: corrections are new rows.
-    amount is always positive; entry_type says whether it adds or subtracts."""
+    """Append-only history (UPDATE/DELETE blocked by a DB trigger).
+
+    entry_type: credit (ride earned) | debit (a redemption) | reversal (ride cancelled).
+    amount is always positive; entry_type gives the direction.
+    idempotency_key: set on debits when the client sent an Idempotency-Key header.
+    """
 
     __tablename__ = "ledger_entries"
 
@@ -106,6 +88,18 @@ class LedgerEntry(Base):
     amount: Mapped[int] = mapped_column(BigInteger)
     reason: Mapped[str] = mapped_column(Text)
     ride_id: Mapped[str | None] = mapped_column(ForeignKey("rides.ride_id"))
-    redemption_id: Mapped[int | None] = mapped_column(ForeignKey("redemptions.id"))
-    lot_id: Mapped[int | None] = mapped_column(ForeignKey("credit_lots.id"))
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RedemptionAllocation(Base):
+    """Redemption (debit entry) X took `amount` from ride Y's credits.
+    One redemption can draw on several rides, oldest expiry first."""
+
+    __tablename__ = "redemption_allocations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    ledger_entry_id: Mapped[int] = mapped_column(ForeignKey("ledger_entries.id"))
+    ride_id: Mapped[str] = mapped_column(ForeignKey("rides.ride_id"))
+    amount: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

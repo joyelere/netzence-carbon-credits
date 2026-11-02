@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.enums import CreditStatus, EntryType
+from app.schemas.common import Pagination
 
 
 class BalanceResource(BaseModel):
@@ -20,7 +21,6 @@ class HistoryEntryResource(BaseModel):
     amount: str             # always positive, e.g. "1.500"; `type` gives the direction
     reason: str
     ride_id: str | None
-    redemption_id: int | None
     occurred_at: datetime         # when it happened (credits: the ride's completed_at)
     recorded_at: datetime         # when this service saved it
     # Credit lines only (null on others): what has happened to these credits so far
@@ -30,15 +30,6 @@ class HistoryEntryResource(BaseModel):
     expired: str | None = None     # ran out unused at expires_at
     reversed: str | None = None    # taken back because the ride was cancelled
     remaining: str | None = None   # still spendable now
-
-
-class Pagination(BaseModel):
-    """Same shape as Laravel's paginate() meta."""
-
-    current_page: int
-    per_page: int
-    total: int
-    last_page: int
 
 
 class HistoryResource(BaseModel):

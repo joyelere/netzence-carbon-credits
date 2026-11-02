@@ -35,7 +35,7 @@ def test_same_event_twice_adds_credits_once(client):
     assert first.status_code == 201
     assert second.status_code == 200
     assert balance(client) == "1.200"
-    assert scalar("SELECT count(*) FROM credit_lots") == 1
+    assert scalar("SELECT count(*) FROM rides") == 1
     assert scalar("SELECT count(*) FROM ledger_entries") == 1
 
 
@@ -62,7 +62,7 @@ def test_duplicate_events_arriving_at_the_same_time_credit_once():
 
     assert codes.count(201) == 1
     assert codes.count(200) == n - 1
-    assert scalar("SELECT count(*) FROM credit_lots") == 1
+    assert scalar("SELECT count(*) FROM rides") == 1
     assert scalar("SELECT sum(amount) FROM ledger_entries") == 1200
 
 

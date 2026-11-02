@@ -32,8 +32,8 @@ def test_simultaneous_redeems_never_take_the_balance_below_zero():
     assert codes.count(201) == 5
     assert codes.count(422) == 15
     assert balance(setup) == "0.000"
-    assert scalar("SELECT min(remaining) FROM credit_lots") == 0
-    assert scalar("SELECT count(*) FROM redemptions") == 5
+    assert scalar("SELECT min(credits_remaining) FROM rides") == 0
+    assert scalar("SELECT count(*) FROM ledger_entries WHERE entry_type = 'debit'") == 5
 
 
 def test_oldest_credits_are_spent_first_even_if_received_out_of_order(client):
@@ -64,7 +64,7 @@ def test_insufficient_balance_changes_nothing(client):
 
     assert redeem(client, "5").status_code == 422
     assert balance(client) == "1.200"
-    assert scalar("SELECT count(*) FROM redemptions") == 0
+    assert scalar("SELECT count(*) FROM ledger_entries WHERE entry_type = 'debit'") == 0
 
 
 def test_idempotency_key_makes_a_retry_safe(client):
@@ -88,7 +88,7 @@ def test_without_a_key_each_request_is_a_new_redemption(client):
 
 
 def test_crash_halfway_through_a_redeem_leaves_no_trace(client, monkeypatch):
-    """Lots have already been decremented in the transaction when the crash hits;
+    """Rides' credits have already been decremented in the transaction when the crash hits;
     the whole transaction must roll back."""
     complete(client, "r1", km=25)  # 3.000
 
@@ -100,9 +100,9 @@ def test_crash_halfway_through_a_redeem_leaves_no_trace(client, monkeypatch):
 
     assert redeem(crashing, "2.000").status_code == 500
     assert balance(client) == "3.000"
-    assert scalar("SELECT remaining FROM credit_lots") == 3000
-    assert scalar("SELECT count(*) FROM redemptions") == 0
-    assert scalar("SELECT count(*) FROM lot_consumptions") == 0
+    assert scalar("SELECT credits_remaining FROM rides") == 3000
+    assert scalar("SELECT count(*) FROM ledger_entries WHERE entry_type = 'debit'") == 0
+    assert scalar("SELECT count(*) FROM redemption_allocations") == 0
 
 
 def test_unknown_driver_gets_404(client):

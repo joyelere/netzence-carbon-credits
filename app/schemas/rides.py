@@ -8,7 +8,8 @@ from decimal import Decimal
 
 from pydantic import AwareDatetime, BaseModel, Field
 
-from app.enums import RideStatus, VehicleType
+from app.enums import CancellationStatus, RideStatus, VehicleType
+from app.schemas.common import Pagination
 
 Id = Field(min_length=1, max_length=64)
 
@@ -43,7 +44,7 @@ class RideResource(BaseModel):
     status: RideStatus
     credits: str  # e.g. "1.500" — string so JSON never carries a float
     completed_at: datetime
-    expires_at: datetime | None
+    expires_at: datetime
 
 
 class RideCancelledRequest(BaseModel):
@@ -57,9 +58,24 @@ class RideCancelledRequest(BaseModel):
 
 class CancellationResource(BaseModel):
     ride_id: str
-    # applied: credits reversed now.
+    # applied: credits reversed.
     # pending: completion not seen yet; it will be reversed the moment it arrives.
-    state: str
+    status: CancellationStatus
     reason: str | None
+    received_at: datetime
+    applied_at: datetime | None
     reversed: str            # unspent credits taken back
     already_redeemed: str    # spent before the cancellation; not clawed back
+
+
+class PendingCancellationResource(BaseModel):
+    ride_id: str
+    reason: str | None
+    received_at: datetime
+    waiting_hours: float     # how long we have been waiting for the ride's completion
+
+
+class PendingCancellationsResource(BaseModel):
+    older_than_hours: int
+    cancellations: list[PendingCancellationResource]
+    pagination: Pagination

@@ -21,14 +21,16 @@ from sqlalchemy import text  # noqa: E402
 from app.database import engine  # noqa: E402
 from app.main import app  # noqa: E402
 
-TABLES = "ledger_entries, lot_consumptions, redemptions, credit_lots, ride_cancellations, rides, drivers"
+TABLES = "redemption_allocations, ledger_entries, ride_cancellations, rides, drivers"
 
 
 @pytest.fixture(scope="session", autouse=True)
 def migrated_database():
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
-    command.downgrade(cfg, "base")
+    # start from an empty database every run, then apply every migration in order
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public"))
     command.upgrade(cfg, "head")
     yield
 
@@ -83,5 +85,6 @@ def history(client, driver_id="d1", **params) -> dict:
 
 
 def scalar(sql: str, **params):
-    with engine.connect() as conn:
+    """Run one SQL statement (committed) and return the first column of the first row."""
+    with engine.begin() as conn:
         return conn.execute(text(sql), params).scalar()

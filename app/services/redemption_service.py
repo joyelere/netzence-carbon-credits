@@ -3,11 +3,12 @@
 How two simultaneous redeems are kept from overspending:
   1. Lock the driver row (SELECT ... FOR UPDATE). A second redeem for the same
      driver waits here until the first commits or rolls back.
-  2. Only then read the driver's unexpired lots and check the balance, so the
+  2. Only then read the driver's unexpired rides and check the balance, so the
      check always sees the result of any redeem that ran before it.
-  3. Spend lots oldest-expiry first, record which lots were used, write one
-     debit ledger entry, commit. All in one transaction.
-The CHECK (remaining >= 0) constraint is the last line of defence.
+  3. Spend rides' credits oldest-expiry first, write one debit ledger entry
+     (that entry IS the redemption), record which rides it drew on, commit.
+     All in one transaction.
+The CHECK (credits_remaining >= 0) constraint is the last line of defence.
 """
 
 from sqlalchemy import func, select
@@ -19,8 +20,8 @@ from app.exceptions import (
     IdempotencyConflictException,
     InsufficientBalanceException,
 )
-from app.models import CreditLot, Driver, LedgerEntry, LotConsumption, Redemption
-from app.schemas.redemptions import ConsumedLot, RedeemRequest, RedemptionResource
+from app.models import Driver, LedgerEntry, RedemptionAllocation, Ride
+from app.schemas.redemptions import ConsumedRide, RedeemRequest, RedemptionResource
 from app.services.credit_policy import format_credits, to_milli
 from app.services.driver_service import available_balance
 
@@ -32,7 +33,8 @@ def redeem(
 
     idempotency_key (from the Idempotency-Key header) is optional. Without it a
     retried request is a new redemption — the server cannot tell a retry from a
-    genuine second redeem. Concurrency safety never depends on it."""
+    genuine second redeem. Concurrency safety never depends on it.
+    """
     amount = to_milli(data.amount)
 
     with db.begin():
@@ -44,9 +46,9 @@ def redeem(
         # Replay of a redeem we already did? Return it instead of spending again.
         if idempotency_key:
             previous = db.scalar(
-                select(Redemption).where(
-                    Redemption.driver_id == driver_id,
-                    Redemption.idempotency_key == idempotency_key,
+                select(LedgerEntry).where(
+                    LedgerEntry.driver_id == driver_id,
+                    LedgerEntry.idempotency_key == idempotency_key,
                 )
             )
             if previous is not None:
@@ -54,72 +56,68 @@ def redeem(
                     raise IdempotencyConflictException(idempotency_key)
                 return _to_resource(db, previous), False
 
-        # 2. read spendable lots, oldest expiry first
-        lots = db.scalars(
-            select(CreditLot)
+        # 2. read spendable rides, oldest expiry first
+        rides = db.scalars(
+            select(Ride)
             .where(
-                CreditLot.driver_id == driver_id,
-                CreditLot.expires_at > func.now(),
-                CreditLot.remaining > 0,
+                Ride.driver_id == driver_id,
+                Ride.expires_at > func.now(),
+                Ride.credits_remaining > 0,
             )
-            .order_by(CreditLot.expires_at, CreditLot.id)
+            .order_by(Ride.expires_at, Ride.ride_id)
         ).all()
 
-        available = sum(lot.remaining for lot in lots)
+        available = sum(r.credits_remaining for r in rides)
         if available < amount:
             raise InsufficientBalanceException(format_credits(available), format_credits(amount))
 
         # 3. spend FIFO
-        redemption = Redemption(
-            driver_id=driver_id,
-            amount=amount,
-            reason=data.reason,
-            idempotency_key=idempotency_key,
-        )
-        db.add(redemption)
-        db.flush()
-
+        taken: list[tuple[str, int]] = []
         still_needed = amount
-        for lot in lots:
+        for ride in rides:
             if still_needed == 0:
                 break
-            take = min(lot.remaining, still_needed)
-            lot.remaining -= take
+            take = min(ride.credits_remaining, still_needed)
+            ride.credits_remaining -= take
             still_needed -= take
-            db.add(LotConsumption(redemption_id=redemption.id, lot_id=lot.id, amount=take))
+            taken.append((ride.ride_id, take))
 
         reason = f"Redeemed {format_credits(amount)} credits"
         if data.reason:
             reason += f": {data.reason}"
-        db.add(
-            LedgerEntry(
-                driver_id=driver_id,
-                entry_type=EntryType.DEBIT.value,
-                amount=amount,
-                reason=reason,
-                redemption_id=redemption.id,
-            )
+        debit = LedgerEntry(
+            driver_id=driver_id,
+            entry_type=EntryType.DEBIT.value,
+            amount=amount,
+            reason=reason,
+            idempotency_key=idempotency_key,
+        )
+        db.add(debit)
+        db.flush()  # get debit.id
+        db.add_all(
+            RedemptionAllocation(ledger_entry_id=debit.id, ride_id=ride_id, amount=take)
+            for ride_id, take in taken
         )
         db.flush()
-        return _to_resource(db, redemption), True
+        return _to_resource(db, debit), True
 
 
-def _to_resource(db: Session, redemption: Redemption) -> RedemptionResource:
+def _to_resource(db: Session, debit: LedgerEntry) -> RedemptionResource:
     consumed = db.execute(
-        select(CreditLot.ride_id, LotConsumption.amount, CreditLot.expires_at)
-        .join(CreditLot, CreditLot.id == LotConsumption.lot_id)
-        .where(LotConsumption.redemption_id == redemption.id)
-        .order_by(CreditLot.expires_at, CreditLot.id)
+        select(RedemptionAllocation.ride_id, RedemptionAllocation.amount, Ride.expires_at)
+        .join(Ride, Ride.ride_id == RedemptionAllocation.ride_id)
+        .where(RedemptionAllocation.ledger_entry_id == debit.id)
+        .order_by(RedemptionAllocation.id)
     ).all()
     return RedemptionResource(
-        redemption_id=redemption.id,
-        driver_id=redemption.driver_id,
-        amount=format_credits(redemption.amount),
-        reason=redemption.reason,
-        balance_after=format_credits(available_balance(db, redemption.driver_id)),
+        redemption_id=debit.id,
+        driver_id=debit.driver_id,
+        amount=format_credits(debit.amount),
+        reason=debit.reason,
+        balance_after=format_credits(available_balance(db, debit.driver_id)),
         consumed=[
-            ConsumedLot(ride_id=r.ride_id, amount=format_credits(r.amount), expires_at=r.expires_at)
+            ConsumedRide(ride_id=r.ride_id, amount=format_credits(r.amount), expires_at=r.expires_at)
             for r in consumed
         ],
-        created_at=redemption.created_at,
+        created_at=debit.created_at,
     )

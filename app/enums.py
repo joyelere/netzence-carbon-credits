@@ -46,3 +46,8 @@ class CreditStatus(str, Enum):
     USED = "used"                      # fully redeemed
     EXPIRED = "expired"                # passed expires_at with some unused
     REVERSED = "reversed"              # ride was cancelled, unspent credits taken back
+
+
+class CancellationStatus(str, Enum):
+    PENDING = "pending"  # ride not completed (yet): nothing reversed, no balance affected
+    APPLIED = "applied"  # ride's unspent credits were reversed at applied_at

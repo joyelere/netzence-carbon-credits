@@ -81,9 +81,9 @@ def test_ledger_is_append_only_at_the_database_level(client):
                 conn.execute(text(sql))
 
 
-def test_database_refuses_to_overspend_a_lot_even_if_code_had_a_bug(client):
+def test_database_refuses_to_overspend_a_ride_even_if_code_had_a_bug(client):
     complete(client, "r1", km=10)
 
-    with pytest.raises(DBAPIError, match="ck_lots_remaining_in_range"):
+    with pytest.raises(DBAPIError, match="ck_rides_remaining_in_range"):
         with engine.begin() as conn:
-            conn.execute(text("UPDATE credit_lots SET remaining = -1"))
+            conn.execute(text("UPDATE rides SET credits_remaining = -1"))

@@ -1,5 +1,7 @@
 """App entrypoint — like bootstrap/app.php + routes/api.php."""
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -8,6 +10,8 @@ from app.config import settings
 from app.exceptions import AppException
 from app.responses import send_error, send_success
 from app.routers import drivers, rides
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
 app = FastAPI(title=settings.app_name, version="1.0.0")
 app.include_router(rides.router)

@@ -14,17 +14,17 @@ class RedeemRequest(BaseModel):
     model_config = {"json_schema_extra": {"example": {"amount": "2.000", "reason": "Charging voucher"}}}
 
 
-class ConsumedLot(BaseModel):
+class ConsumedRide(BaseModel):
     ride_id: str
     amount: str
     expires_at: datetime
 
 
 class RedemptionResource(BaseModel):
-    redemption_id: int
+    redemption_id: int  # = id of its debit entry in the history
     driver_id: str
     amount: str
     reason: str | None
     balance_after: str
-    consumed: list[ConsumedLot]  # which rides' credits were used, oldest first
+    consumed: list[ConsumedRide]  # which rides' credits were used, oldest first
     created_at: datetime

@@ -51,7 +51,7 @@ def test_duplicate_cancellation_reverses_once(client):
 def test_cancellation_before_completion_is_applied_when_the_ride_arrives(client):
     early = cancel(client, "r1", reason="Passenger disputed")
     assert early.status_code == 202
-    assert early.json()["data"]["state"] == "pending"
+    assert early.json()["data"]["status"] == "pending"
 
     completed = complete(client, "r1", km=10)
 
@@ -83,7 +83,7 @@ def test_cancel_racing_redeem_never_overspends():
         assert c.result() == 200
         assert r.result() in (201, 422)
 
-    used = scalar("SELECT coalesce(sum(amount), 0) FROM lot_consumptions")
+    used = scalar("SELECT coalesce(sum(amount), 0) FROM redemption_allocations")
     reversed_ = scalar("SELECT coalesce(sum(amount), 0) FROM ledger_entries WHERE entry_type = 'reversal'")
     assert used + reversed_ == 3000
     assert balance(setup) == "0.000"
@@ -102,3 +102,61 @@ def test_early_cancellation_keeps_the_time_the_cancel_arrived(client):
     created_at = scalar("SELECT created_at FROM rides WHERE ride_id = 'r1'")
     assert cancelled_at == received_at
     assert cancelled_at < created_at
+
+
+# ---- pending cancellations: status, applied_at, the pending list, the warning ----
+
+def pending_list(client, **params) -> dict:
+    return client.get("/rides/cancellations/pending", params=params).json()["data"]
+
+
+def test_normal_cancellation_is_applied_immediately(client):
+    complete(client, "r1", km=10)
+
+    data = cancel(client, "r1").json()["data"]
+
+    assert data["status"] == "applied"
+    assert data["applied_at"] is not None
+    assert scalar("SELECT status FROM ride_cancellations WHERE ride_id = 'r1'") == "applied"
+
+
+def test_early_cancellation_is_pending_until_the_ride_arrives(client):
+    data = cancel(client, "r1").json()["data"]
+    assert data["status"] == "pending"
+    assert data["applied_at"] is None
+    assert [c["ride_id"] for c in pending_list(client, older_than_hours=0)["cancellations"]] == ["r1"]
+
+    complete(client, "r1", km=10)
+
+    assert scalar("SELECT status FROM ride_cancellations WHERE ride_id = 'r1'") == "applied"
+    assert scalar("SELECT applied_at IS NOT NULL FROM ride_cancellations WHERE ride_id = 'r1'")
+    assert pending_list(client, older_than_hours=0)["cancellations"] == []
+
+
+def test_pending_list_only_shows_cancellations_stuck_longer_than_the_threshold(client):
+    cancel(client, "stuck")
+    cancel(client, "fresh")
+    scalar("UPDATE ride_cancellations SET received_at = now() - interval '50 hours' "
+           "WHERE ride_id = 'stuck' RETURNING 1")
+
+    data = pending_list(client)  # default: older than 48 hours
+
+    assert data["older_than_hours"] == 48
+    assert [c["ride_id"] for c in data["cancellations"]] == ["stuck"]
+    assert data["cancellations"][0]["waiting_hours"] >= 50
+    assert data["pagination"]["total"] == 1
+
+
+def test_a_stuck_pending_cancellation_never_affects_the_balance(client):
+    complete(client, "real_ride", km=10)  # 1.200
+    cancel(client, "never_completes")
+
+    assert balance(client) == "1.200"
+    assert [e["ride_id"] for e in history(client)["entries"]] == ["real_ride"]
+
+
+def test_cancellation_for_unknown_ride_logs_a_warning(client, caplog):
+    with caplog.at_level("WARNING", logger="app.rides"):
+        cancel(client, "ghost")
+
+    assert "Cancellation for unknown ride ghost stored as pending" in caplog.text

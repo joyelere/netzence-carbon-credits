@@ -1,3 +1,5 @@
+name: netzence-carbon-credits
+
 services:
   db:
     image: postgres:16-alpine
@@ -47,6 +49,17 @@ services:
       ADMINER_DEFAULT_SERVER: db
     depends_on:
       - db
+
+  # Log viewer (dev only) — open http://localhost:8888 to watch the api logs live.
+  # Reads the Docker socket read-only and only shows this project's containers.
+  dozzle:
+    image: amir20/dozzle:v8.5.1
+    ports:
+      - "${DOZZLE_PORT:-8888}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      DOZZLE_FILTER: "label=com.docker.compose.project=netzence-carbon-credits"
 
 volumes:
   pgdata:

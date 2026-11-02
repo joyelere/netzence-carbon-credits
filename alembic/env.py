@@ -9,7 +9,8 @@ from app.config import settings
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # keep the app's loggers alive when migrations run in-process (e.g. in tests)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 url = config.get_main_option("sqlalchemy.url") or settings.database_url
 
